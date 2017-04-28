@@ -16,6 +16,7 @@
 
 #include "access/htup.h"
 #include "access/tupdesc.h"
+#include "access/zhtup.h"
 #include "storage/buf.h"
 
 /*----------
@@ -120,7 +121,8 @@ typedef struct TupleTableSlot
 	bool		tts_slow;		/* saved state for slot_deform_tuple */
 #define FIELDNO_TUPLETABLESLOT_TUPLE 5
 	HeapTuple	tts_tuple;		/* physical tuple, or NULL if virtual */
-#define FIELDNO_TUPLETABLESLOT_TUPLEDESCRIPTOR 6
+	ZHeapTuple      tts_ztuple;
+#define FIELDNO_TUPLETABLESLOT_TUPLEDESCRIPTOR 7
 	TupleDesc	tts_tupleDescriptor;	/* slot's tuple descriptor */
 	MemoryContext tts_mcxt;		/* slot itself is in this context */
 	Buffer		tts_buffer;		/* tuple's buffer, or InvalidBuffer */
@@ -169,6 +171,7 @@ extern HeapTuple ExecFetchSlotTuple(TupleTableSlot *slot);
 extern MinimalTuple ExecFetchSlotMinimalTuple(TupleTableSlot *slot);
 extern Datum ExecFetchSlotTupleDatum(TupleTableSlot *slot);
 extern HeapTuple ExecMaterializeSlot(TupleTableSlot *slot);
+extern ZHeapTuple ExecMaterializeZSlot(TupleTableSlot *slot);
 extern TupleTableSlot *ExecCopySlot(TupleTableSlot *dstslot,
 			 TupleTableSlot *srcslot);
 
