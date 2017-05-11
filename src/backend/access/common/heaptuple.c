@@ -1407,16 +1407,19 @@ heap_deform_tuple(HeapTuple tuple, TupleDesc tupleDesc,
 static void
 slot_deform_tuple(TupleTableSlot *slot, int natts)
 {
-	HeapTuple	tuple = slot->tts_tuple;
+	HeapTuple	tuple = NULL;
+	ZHeapTuple	ztuple = NULL;
 	TupleDesc	tupleDesc = slot->tts_tupleDescriptor;
 	Datum	   *values = slot->tts_values;
 	bool	   *isnull = slot->tts_isnull;
-	HeapTupleHeader tup = tuple->t_data;
-	bool		hasnulls = HeapTupleHasNulls(tuple);
+	HeapTupleHeader tup;
+	ZHeapTupleHeader ztup;
+	bool		hasnulls;
+	Form_pg_attribute *att = tupleDesc->attrs;
 	int			attnum;
 	char	   *tp;				/* ptr to tuple data */
 	uint32		off;			/* offset in tuple data */
-	bits8	   *bp = tup->t_bits;	/* ptr to null bitmap in tuple */
+	bits8	   *bp;	/* ptr to null bitmap in tuple */
 	bool		slow;			/* can we use/set attcacheoff? */
 
 	/*
@@ -1437,7 +1440,23 @@ slot_deform_tuple(TupleTableSlot *slot, int natts)
 		slow = slot->tts_slow;
 	}
 
-	tp = (char *) tup + tup->t_hoff;
+	/* slot can either contain heap tuple or zheap tuple */
+	if (slot->tts_ztuple)
+	{
+		ztuple = slot->tts_ztuple;
+		ztup = ztuple->t_data;
+		hasnulls = ZHeapTupleHasNulls(ztuple);
+		bp = ztup->t_bits;
+		tp = (char *) ztup + ztup->t_hoff;
+	}
+	else
+	{
+		tuple = slot->tts_tuple;
+		tup = tuple->t_data;
+		hasnulls = HeapTupleHasNulls(tuple);
+		bp = tup->t_bits;
+		tp = (char *) tup + tup->t_hoff;
+	}
 
 	for (; attnum < natts; attnum++)
 	{
@@ -1609,7 +1628,8 @@ slot_getallattrs(TupleTableSlot *slot)
 {
 	int			tdesc_natts = slot->tts_tupleDescriptor->natts;
 	int			attnum;
-	HeapTuple	tuple;
+	HeapTuple	tuple = NULL;
+	ZHeapTuple	ztuple = NULL;
 
 	/* Quick out if we have 'em all already */
 	if (slot->tts_nvalid == tdesc_natts)
@@ -1617,16 +1637,27 @@ slot_getallattrs(TupleTableSlot *slot)
 
 	/*
 	 * otherwise we had better have a physical tuple (tts_nvalid should equal
-	 * natts in all virtual-tuple cases)
+	 * natts in all virtual-tuple cases).  physical tuple can be either heap
+	 * tuple or zheap tuple.
 	 */
-	tuple = slot->tts_tuple;
-	if (tuple == NULL)			/* internal error */
-		elog(ERROR, "cannot extract attribute from empty tuple slot");
+	if (slot->tts_ztuple)
+	{
+		ztuple = slot->tts_ztuple;
+		if (ztuple == NULL)			/* internal error */
+			elog(ERROR, "cannot extract attribute from empty tuple slot");
+		attnum = ZHeapTupleHeaderGetNatts(ztuple->t_data);
+	}
+	else
+	{
+		tuple = slot->tts_tuple;
+		if (tuple == NULL)			/* internal error */
+			elog(ERROR, "cannot extract attribute from empty tuple slot");
+		attnum = HeapTupleHeaderGetNatts(tuple->t_data);
+	}
 
 	/*
 	 * load up any slots available from physical tuple
 	 */
-	attnum = HeapTupleHeaderGetNatts(tuple->t_data);
 	attnum = Min(attnum, tdesc_natts);
 
 	slot_deform_tuple(slot, attnum);
