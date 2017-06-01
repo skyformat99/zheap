@@ -548,8 +548,8 @@ ExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 	 */
 	if (slot->tts_shouldFree)
 	{
-		if (enable_zheap)
-			pfree(slot->tts_ztuple);
+		if (slot->tts_ztuple != NULL)
+			zheap_freetuple(slot->tts_ztuple);
 		else
 			heap_freetuple(slot->tts_tuple);
 	}
