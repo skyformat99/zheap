@@ -1550,16 +1550,15 @@ slot_getattr(TupleTableSlot *slot, int attnum, bool *isnull)
 	 */
 	if (attnum <= 0)
 	{
-		/*
-		 * FIXME: zheap is not yet supported for system tables.
-		 */
-		if (ztuple)
-			elog(ERROR, "cannot extract system attribute from zheap tuple");
-		if (tuple == NULL)		/* internal error */
+		if (tuple == NULL && ztuple == NULL)		/* internal error */
 			elog(ERROR, "cannot extract system attribute from virtual tuple");
 		if (tuple == &(slot->tts_minhdr))	/* internal error */
 			elog(ERROR, "cannot extract system attribute from minimal tuple");
-		return heap_getsysattr(tuple, attnum, tupleDesc, isnull);
+
+		if (ztuple)
+			return zheap_getsysattr(ztuple, slot->tts_buffer, attnum, tupleDesc, isnull);
+		else
+			return heap_getsysattr(tuple, attnum, tupleDesc, isnull);
 	}
 
 	/*

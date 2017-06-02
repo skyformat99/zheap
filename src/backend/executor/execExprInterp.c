@@ -530,13 +530,19 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Datum		d;
 
 			/* these asserts must match defenses in slot_getattr */
-			Assert(scanslot->tts_tuple != NULL);
+			Assert((scanslot->tts_tuple != NULL) || (scanslot->tts_ztuple != NULL));
 			Assert(scanslot->tts_tuple != &(scanslot->tts_minhdr));
 
 			/* heap_getsysattr has sufficient defenses against bad attnums */
-			d = heap_getsysattr(scanslot->tts_tuple, attnum,
+			if (scanslot->tts_tuple)
+				d = heap_getsysattr(scanslot->tts_tuple, attnum,
 								scanslot->tts_tupleDescriptor,
 								op->resnull);
+			else
+				d = zheap_getsysattr(scanslot->tts_ztuple, InvalidBuffer,
+								attnum, scanslot->tts_tupleDescriptor,
+								op->resnull);
+
 			*op->resvalue = d;
 
 			EEO_NEXT();
