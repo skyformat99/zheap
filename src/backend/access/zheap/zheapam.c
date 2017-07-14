@@ -30,8 +30,9 @@
 #include "access/xact.h"
 #include "access/relscan.h"
 #include "access/tuptoaster.h"
-#include "access/undorecord.h"
 #include "access/undoinsert.h"
+#include "access/undolog.h"
+#include "access/undorecord.h"
 #include "access/visibilitymap.h"
 #include "access/zheap.h"
 #include "access/zhtup.h"
@@ -1876,8 +1877,7 @@ PageFreezeTransSlots(Buffer buf)
 			slot_no = frozen_slots[i];
 
 			opaque->transinfo[slot_no].xid = InvalidTransactionId;
-			/* Fixme: set the InvalidUrecPtr once it is defined. */
-			opaque->transinfo[slot_no].urec_ptr = -1;
+			opaque->transinfo[slot_no].urec_ptr = InvalidUndoRecPtr;
 		}
 
 		/* Xlog Stuff */
@@ -1938,8 +1938,7 @@ ZheapInitPage(Page page, Size pageSize)
 	for (i = 0; i < MAX_PAGE_TRANS_INFO_SLOTS; i++)
 	{
 		opaque->transinfo[i].xid = InvalidTransactionId;
-		/* Fixme: set the InvalidUrecPtr once it is defined. */
-		opaque->transinfo[i].urec_ptr = -1;
+		opaque->transinfo[i].urec_ptr = InvalidUndoRecPtr;
 	}
 }
 
