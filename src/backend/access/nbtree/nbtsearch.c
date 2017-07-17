@@ -1106,7 +1106,12 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 readcomplete:
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
-	scan->xs_ctup.t_self = currItem->heapTid;
+
+	if (RelationStorageIsZHeap(scan->heapRelation))
+		scan->cur_tid = currItem->heapTid;
+	else
+		scan->xs_ctup.t_self = currItem->heapTid;
+
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
 
@@ -1156,7 +1161,12 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
-	scan->xs_ctup.t_self = currItem->heapTid;
+
+	if (RelationStorageIsZHeap(scan->heapRelation))
+		scan->cur_tid = currItem->heapTid;
+	else
+		scan->xs_ctup.t_self = currItem->heapTid;
+
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
 
@@ -1933,7 +1943,12 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
-	scan->xs_ctup.t_self = currItem->heapTid;
+
+	if (RelationStorageIsZHeap(scan->heapRelation))
+		scan->cur_tid = currItem->heapTid;
+	else
+		scan->xs_ctup.t_self = currItem->heapTid;
+
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
 
