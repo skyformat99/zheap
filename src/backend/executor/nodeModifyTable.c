@@ -559,9 +559,22 @@ ExecInsert(ModifyTableState *mtstate,
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
+<<<<<<< HEAD
 				recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
 													   estate, false, NULL,
 													   NIL);
+=======
+			{
+				if (RelationStorageIsZHeap(resultRelationDesc))
+					recheckIndexes = ExecInsertIndexTuples(slot, &(ztuple->t_self),
+														   estate, false, NULL,
+														   arbiterIndexes);
+				else
+					recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
+														   estate, false, NULL,
+														   arbiterIndexes);
+			}
+>>>>>>> Implement insertion of zheap tuples in btree index
 		}
 	}
 
@@ -1280,17 +1293,13 @@ lreplace:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-<<<<<<< HEAD
 				if (ItemPointerIndicatesMovedPartitions(&hufd.ctid))
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("tuple to be updated was already moved to another partition due to concurrent update")));
 
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
-=======
 				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
 					hufd.in_place_updated)
->>>>>>> Support Zheap in-place update and delete operations
 				{
 					TupleTableSlot *epqslot;
 
@@ -1338,8 +1347,15 @@ lreplace:;
 		 * the t_self field.
 		 *
 		 * If it's a HOT update, we mustn't insert new index entries.
+		 *
+		 * FIXME: For a zheap update, we don't update the index entry. It only
+		 * supports in-place updates on non-index columns. We need to decide
+		 * how to do non-in-place updates and deletion marking on the index
+		 * entry for a zheap tuple.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0 && !HeapTupleIsHeapOnly(tuple))
+		if (resultRelInfo->ri_NumIndices > 0
+				&& !RelationStorageIsZHeap(resultRelationDesc)
+				&& !HeapTupleIsHeapOnly(tuple))
 			recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
 												   estate, false, NULL, NIL);
 	}
