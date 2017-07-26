@@ -818,12 +818,9 @@ ldelete:;
 							 errmsg("tuple to be deleted was already moved to another partition due to concurrent update")));
 
 				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
-					hufd.in_place_updated)
+					hufd.in_place_updated_or_locked)
 				{
 					TupleTableSlot *epqslot;
-
-					if (RelationStorageIsZHeap(resultRelationDesc))
-						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
@@ -1299,12 +1296,9 @@ lreplace:;
 							 errmsg("tuple to be updated was already moved to another partition due to concurrent update")));
 
 				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
-					hufd.in_place_updated)
+					hufd.in_place_updated_or_locked)
 				{
 					TupleTableSlot *epqslot;
-
-					if (RelationStorageIsZHeap(resultRelationDesc))
-						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,

@@ -556,6 +556,7 @@ typedef struct EState
 	 * list_length(es_range_table) and are indexed by scan node scanrelid - 1.
 	 */
 	HeapTuple  *es_epqTuple;	/* array of EPQ substitute tuples */
+	ZHeapTuple *es_epqZTuple;	/* array of EPQ substitute ztuples */
 	bool	   *es_epqTupleSet; /* true if EPQ tuple is provided */
 	bool	   *es_epqScanDone; /* true if EPQ tuple has been fetched */
 
