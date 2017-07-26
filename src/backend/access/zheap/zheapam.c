@@ -565,6 +565,7 @@ reacquire_buffer:
 	undorecord.uur_info = 0;
 	undorecord.uur_prevlen = 0;	/* Fixme - need to figure out how to set this value and then decide whether to WAL log it */
 	undorecord.uur_relfilenode = relation->rd_node.relNode;
+	undorecord.uur_xid = InvalidTransactionId;
 	undorecord.uur_cid = cid;
 	undorecord.uur_tsid = relation->rd_node.spcNode;
 	undorecord.uur_fork = MAIN_FORKNUM;
@@ -915,11 +916,17 @@ check_tup_satisfies_update:
 
 	prev_urecptr = PageGetUNDO(page, trans_slot_id);
 
-	/* prepare an undo record */
+	/*
+	 * Prepare an undo record.  We need to separately store the latest
+	 * transaction id that has changed the tuple to ensure that we don't
+	 * try to process the tuple in undo chain that is already discarded.
+	 * See GetTupleFromUndo.
+	 */
 	undorecord.uur_type = UNDO_DELETE;
 	undorecord.uur_info = 0;
 	undorecord.uur_prevlen = 0;	/* Fixme - need to figure out how to set this value and then decide whether to WAL log it */
 	undorecord.uur_relfilenode = relation->rd_node.relNode;
+	undorecord.uur_xid = ZHeapTupleHeaderGetRawXid(zheaptup.t_data, opaque);
 	undorecord.uur_cid = cid;
 	undorecord.uur_tsid = relation->rd_node.spcNode;
 	undorecord.uur_fork = MAIN_FORKNUM;
@@ -1271,11 +1278,17 @@ check_tup_satisfies_update:
 
 	prev_urecptr = PageGetUNDO(page, trans_slot_id);
 
-	/* prepare an undo record */
+	/*
+	 * Prepare an undo record.  We need to separately store the latest
+	 * transaction id that has changed the tuple to ensure that we don't
+	 * try to process the tuple in undo chain that is already discarded.
+	 * See GetTupleFromUndo.
+	 */
 	undorecord.uur_type = UNDO_INPLACE_UPDATE;
 	undorecord.uur_info = 0;
 	undorecord.uur_prevlen = 0;	/* Fixme - need to figure out how to set this value and then decide whether to WAL log it */
 	undorecord.uur_relfilenode = relation->rd_node.relNode;
+	undorecord.uur_xid = ZHeapTupleHeaderGetRawXid(oldtup.t_data, opaque);
 	undorecord.uur_cid = cid;
 	undorecord.uur_tsid = relation->rd_node.spcNode;
 	undorecord.uur_fork = MAIN_FORKNUM;
@@ -1567,11 +1580,17 @@ failed:
 
 	prev_urecptr = PageGetUNDO(page, trans_slot_id);
 
-	/* prepare an undo record */
+	/*
+	 * Prepare an undo record.  We need to separately store the latest
+	 * transaction id that has changed the tuple to ensure that we don't
+	 * try to process the tuple in undo chain that is already discarded.
+	 * See GetTupleFromUndo.
+	 */
 	undorecord.uur_type = UNDO_XID_LOCK_ONLY;
 	undorecord.uur_info = 0;
 	undorecord.uur_prevlen = 0;
 	undorecord.uur_relfilenode = relation->rd_node.relNode;
+	undorecord.uur_xid = ZHeapTupleHeaderGetRawXid(zhtup.t_data, opaque);
 	undorecord.uur_cid = cid;
 	undorecord.uur_tsid = relation->rd_node.spcNode;
 	undorecord.uur_fork = MAIN_FORKNUM;
