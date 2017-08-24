@@ -758,6 +758,7 @@ ldelete:;
 			result = zheap_delete(resultRelationDesc, tupleid,
 								  estate->es_output_cid,
 								  estate->es_crosscheck_snapshot,
+								  estate->es_snapshot,
 								  true /* wait for commit */ ,
 								  &hufd);
 		else
@@ -1238,6 +1239,7 @@ lreplace:;
 			result = zheap_update(resultRelationDesc, tupleid, ztuple,
 								  estate->es_output_cid,
 								  estate->es_crosscheck_snapshot,
+								  estate->es_snapshot,
 								  true /* wait for commit */ ,
 								  &hufd, &lockmode);
 		else
