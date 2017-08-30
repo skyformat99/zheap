@@ -114,6 +114,7 @@
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "postmaster/undoworker.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
 #include "storage/fd.h"
@@ -978,6 +979,9 @@ PostmasterMain(int argc, char *argv[])
 	 * background worker slots.
 	 */
 	ApplyLauncherRegister();
+
+	/* Register the Undo worker launcher. */
+	UndoLauncherRegister();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start
