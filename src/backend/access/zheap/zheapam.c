@@ -3586,6 +3586,7 @@ zheapgettup_pagemode(HeapScanDesc scan,
 		 * here to keep the code as in heapgettup_pagemode.
 		 */
 		Assert(false);
+		return NULL;
 	}
 
 	/*
