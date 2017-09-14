@@ -5017,8 +5017,9 @@ reacquire_buffer:
 	 */
 	if (IsCatalogRelation(relation))
 	{
-		//for (i = 0; i < ntuples; i++)
-		//	CacheInvalidateHeapTuple(relation, zheaptuples[i], NULL);
+		/*
+		for (i = 0; i < ntuples; i++)
+			CacheInvalidateHeapTuple(relation, zheaptuples[i], NULL); */
 	}
 
 	/*
