@@ -29,7 +29,6 @@
 #define HEAP_INSERT_FROZEN		0x0004
 #define HEAP_INSERT_SPECULATIVE 0x0008
 
-typedef struct BulkInsertStateData *BulkInsertState;
 
 
 /* ----------------
