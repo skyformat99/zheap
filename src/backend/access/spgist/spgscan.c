@@ -624,7 +624,10 @@ spggettuple(IndexScanDesc scan, ScanDirection dir)
 		if (so->iPtr < so->nPtrs)
 		{
 			/* continuing to return tuples from a leaf page */
-			scan->xs_ctup.t_self = so->heapPtrs[so->iPtr];
+			if (RelationStorageIsZHeap(scan->heapRelation))
+				scan->cur_tid = so->heapPtrs[so->iPtr];
+			else
+				scan->xs_ctup.t_self = so->heapPtrs[so->iPtr];
 			scan->xs_recheck = so->recheck[so->iPtr];
 			scan->xs_hitup = so->reconTups[so->iPtr];
 			so->iPtr++;
