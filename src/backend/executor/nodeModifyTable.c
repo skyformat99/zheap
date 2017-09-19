@@ -314,7 +314,12 @@ ExecInsert(ModifyTableState *mtstate,
 	 * could hack the OID if desired.
 	 */
 	if (resultRelationDesc->rd_rel->relhasoids)
-		HeapTupleSetOid(tuple, InvalidOid);
+	{
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			ZHeapTupleSetOid(ztuple, InvalidOid);
+		else
+			HeapTupleSetOid(tuple, InvalidOid);
+	}
 
 	/*
 	 * BEFORE ROW INSERT Triggers.
