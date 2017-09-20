@@ -903,7 +903,9 @@ ldelete:;
 		 */
 		TupleTableSlot *rslot;
 		HeapTupleData deltuple;
+		ZHeapTuple	zdeltuple;
 		Buffer		delbuffer;
+		bool		found;
 
 		if (resultRelInfo->ri_FdwRoutine)
 		{
@@ -922,14 +924,21 @@ ldelete:;
 			else
 			{
 				deltuple.t_self = *tupleid;
-				if (!heap_fetch(resultRelationDesc, SnapshotAny,
-								&deltuple, &delbuffer, false, NULL))
-					elog(ERROR, "failed to fetch deleted tuple for DELETE RETURNING");
+				if (RelationStorageIsZHeap(resultRelationDesc) ?
+					(found = zheap_fetch(resultRelationDesc, SnapshotAny, tupleid, &zdeltuple,
+										&delbuffer, false, NULL)) :
+					(found = heap_fetch(resultRelationDesc, SnapshotAny,
+									   &deltuple, &delbuffer, false, NULL)))
+					if (!found)
+						elog(ERROR, "failed to fetch deleted tuple for DELETE RETURNING");
 			}
 
 			if (slot->tts_tupleDescriptor != RelationGetDescr(resultRelationDesc))
 				ExecSetSlotDescriptor(slot, RelationGetDescr(resultRelationDesc));
-			ExecStoreTuple(&deltuple, slot, InvalidBuffer, false);
+			if (RelationStorageIsZHeap(resultRelationDesc))
+				ExecStoreZTuple(zdeltuple, slot, InvalidBuffer, false);
+			else
+				ExecStoreTuple(&deltuple, slot, InvalidBuffer, false);
 		}
 
 		rslot = ExecProcessReturning(resultRelInfo, slot, planSlot);
@@ -938,7 +947,10 @@ ldelete:;
 		 * Before releasing the target tuple again, make sure rslot has a
 		 * local copy of any pass-by-reference values.
 		 */
-		ExecMaterializeSlot(rslot);
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			ExecMaterializeZSlot(rslot);
+		else
+			ExecMaterializeSlot(rslot);
 
 		ExecClearTuple(slot);
 		if (BufferIsValid(delbuffer))
