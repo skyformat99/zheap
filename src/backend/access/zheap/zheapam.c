@@ -2795,7 +2795,7 @@ ZHeapTupleGetCid(ZHeapTuple zhtup, Buffer buf)
 	opaque = (ZHeapPageOpaque) PageGetSpecialPointer(BufferGetPage(buf));
 
 	if (TransactionIdPrecedes(ZHeapTupleHeaderGetRawXid(zhtup->t_data, opaque),
-								RecentGlobalXmin))
+							  pg_atomic_read_u32(&ProcGlobal->oldestXidHavingUndo)))
 		return InvalidCommandId;
 
 	urec = UndoFetchRecord(ZHeapTupleHeaderGetRawUndoPtr(zhtup->t_data, opaque),
@@ -2932,9 +2932,11 @@ ZHeapTupleGetTransInfo(ZHeapTuple zhtup, Buffer buf, TransactionId *xid_out,
 				 * The undo tuple must be visible, if the undo record containing
 				 * the information of the last transaction that has updated the
 				 * tuple is discarded or the transaction that has last updated the
-				 * undo tuple precedes RecentGlobalXmin.
+				 * undo tuple precedes smallest xid that has undo.
 				 */
-				if (urec == NULL)
+				if (urec == NULL ||
+					TransactionIdPrecedes(urec->uur_prevxid,
+								  pg_atomic_read_u32(&ProcGlobal->oldestXidHavingUndo)))
 				{
 					xid = InvalidTransactionId;
 					cid = InvalidCommandId;
@@ -4096,8 +4098,6 @@ zheap_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	if (all_dead)
 		*all_dead = false;
 
-	Assert(TransactionIdIsValid(RecentGlobalXmin));
-
 	Assert(ItemPointerGetBlockNumber(tid) == BufferGetBlockNumber(buffer));
 	offnum = ItemPointerGetOffsetNumber(tid);
 	/* check for bogus TID */
@@ -4155,7 +4155,9 @@ zheap_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	 * request, check whether tuple is dead to all transactions.
 	 */
 	if (!resulttup && all_dead &&
-		ZHeapTupleIsSurelyDead(&loctup_tmp, RecentGlobalXmin, buffer))
+		ZHeapTupleIsSurelyDead(&loctup_tmp,
+							   pg_atomic_read_u32(&ProcGlobal->oldestXidHavingUndo),
+							   buffer))
 		*all_dead = true;
 
 	return resulttup;
