@@ -40,6 +40,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "postmaster/undoloop.h"
 #include "replication/logical.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
@@ -187,8 +188,10 @@ typedef struct TransactionStateData
 	bool		prevXactReadOnly;	/* entry-time xact r/o state */
 	bool		startedInRecovery;	/* did we start in recovery? */
 	bool		didLogXid;		/* has xid been included in WAL record? */
-	int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
-	struct TransactionStateData *parent;	/* back link to parent */
+	int			parallelModeLevel;		/* Enter/ExitParallelMode counter */
+	UndoRecPtr	start_urec_ptr;	/* start undo record location */
+	UndoRecPtr	latest_urec_ptr;	/* latest undo record location */
+	struct TransactionStateData *parent;		/* back link to parent */
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -219,6 +222,8 @@ static TransactionStateData TopTransactionStateData = {
 	false,						/* startedInRecovery */
 	false,						/* didLogXid */
 	0,							/* parallelModeLevel */
+	InvalidUndoRecPtr,			/* start undo record location */
+	InvalidUndoRecPtr,			/* current undo record location */
 	NULL						/* link to parent state block */
 };
 
@@ -905,6 +910,21 @@ bool
 IsInParallelMode(void)
 {
 	return CurrentTransactionState->parallelModeLevel != 0;
+}
+
+/*
+ * SetCurrentUndoLocation
+ */
+void
+SetCurrentUndoLocation(UndoRecPtr urec_ptr)
+{
+	/*
+	 * Set the start undo record pointer for first undo record in a
+	 * subtransaction.
+	 */
+	if (!UndoRecPtrIsValid(CurrentTransactionState->start_urec_ptr))
+		CurrentTransactionState->start_urec_ptr = urec_ptr;
+	CurrentTransactionState->latest_urec_ptr = urec_ptr;
 }
 
 /*
@@ -1855,6 +1875,10 @@ StartTransaction(void)
 	 */
 	nUnreportedXids = 0;
 	s->didLogXid = false;
+
+	/* initialize undo record locations for the transaction */
+	s->start_urec_ptr = InvalidUndoRecPtr;
+	s->latest_urec_ptr = InvalidUndoRecPtr;
 
 	/*
 	 * must initialize resource-management stuff first
@@ -3668,6 +3692,7 @@ void
 UserAbortTransactionBlock(void)
 {
 	TransactionState s = CurrentTransactionState;
+	UndoRecPtr	latest_urec_ptr = s->latest_urec_ptr;
 
 	switch (s->blockState)
 	{
@@ -3706,6 +3731,8 @@ UserAbortTransactionBlock(void)
 					elog(FATAL, "UserAbortTransactionBlock: unexpected state %s",
 						 BlockStateAsString(s->blockState));
 				s = s->parent;
+				if (!UndoRecPtrIsValid(latest_urec_ptr))
+					latest_urec_ptr = s->latest_urec_ptr;
 			}
 			if (s->blockState == TBLOCK_INPROGRESS)
 				s->blockState = TBLOCK_ABORT_PENDING;
@@ -3763,6 +3790,10 @@ UserAbortTransactionBlock(void)
 				 BlockStateAsString(s->blockState));
 			break;
 	}
+
+	/* execute the undo actions */
+	if (latest_urec_ptr)
+		execute_undo_actions(latest_urec_ptr, s->start_urec_ptr);
 }
 
 /*
@@ -4021,6 +4052,12 @@ RollbackToSavepoint(const char *name)
 	TransactionState s = CurrentTransactionState;
 	TransactionState target,
 				xact;
+<<<<<<< HEAD
+=======
+	ListCell   *cell;
+	char	   *name = NULL;
+	UndoRecPtr	latest_urec_ptr = s->latest_urec_ptr;
+>>>>>>> Undo Action and Replay for Insert Operation
 
 	/*
 	 * Workers synchronize transaction state at the beginning of each parallel
@@ -4120,6 +4157,8 @@ RollbackToSavepoint(const char *name)
 				 BlockStateAsString(xact->blockState));
 		xact = xact->parent;
 		Assert(PointerIsValid(xact));
+		if (!UndoRecPtrIsValid(latest_urec_ptr))
+			latest_urec_ptr = xact->latest_urec_ptr;
 	}
 
 	/* And mark the target as "restart pending" */
@@ -4130,6 +4169,10 @@ RollbackToSavepoint(const char *name)
 	else
 		elog(FATAL, "RollbackToSavepoint: unexpected state %s",
 			 BlockStateAsString(xact->blockState));
+
+	/* execute the undo actions */
+	if (latest_urec_ptr)
+		execute_undo_actions(latest_urec_ptr, xact->start_urec_ptr);
 }
 
 /*
@@ -4534,6 +4577,10 @@ StartSubTransaction(void)
 	AtSubStart_ResourceOwner();
 	AtSubStart_Notify();
 	AfterTriggerBeginSubXact();
+
+	/* initialize undo record locations for the transaction */
+	s->start_urec_ptr = InvalidUndoRecPtr;
+	s->latest_urec_ptr = InvalidUndoRecPtr;
 
 	s->state = TRANS_INPROGRESS;
 
