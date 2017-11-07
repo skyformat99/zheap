@@ -828,7 +828,7 @@ bitgetzpage(HeapScanDesc scan, TBMIterateResult *tbmres)
 
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
-	Assert(ntup <= MaxHeapTuplesPerPage);
+	Assert(ntup <= MaxZHeapTuplesPerPage);
 	scan->rs_ntuples = ntup;
 }
 
