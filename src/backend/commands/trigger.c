@@ -2762,7 +2762,8 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 	{
 		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
 			trigtuple = GetZTupleForTrigger(estate, epqstate, relinfo, tupleid,
-											LockTupleExclusive, &newSlot);
+											LockTupleExclusive, &newSlot,
+											NULL);
 		else
 			trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
 										   LockTupleExclusive, &newSlot);
@@ -2838,6 +2839,7 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 												relinfo,
 												tupleid,
 												LockTupleExclusive,
+												NULL,
 												NULL);
 			else
 				trigtuple = GetTupleForTrigger(estate,
@@ -3006,7 +3008,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		/* get a copy of the on-disk tuple we are planning to update */
 		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
 			trigtuple = GetZTupleForTrigger(estate, epqstate, relinfo, tupleid,
-									   lockmode, &newSlot);
+									   lockmode, &newSlot, NULL);
 		else
 			trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
 									   lockmode, &newSlot);
@@ -3139,7 +3141,8 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 												relinfo,
 												tupleid,
 												LockTupleExclusive,
-												NULL);
+												NULL,
+												newtuple ? &newtuple->t_self : NULL);
 			else
 				trigtuple = GetTupleForTrigger(estate,
 											   NULL,
@@ -4251,9 +4254,14 @@ AfterTriggerExecute(AfterTriggerEvent event,
 	HeapTupleData tuple1;
 	HeapTupleData tuple2;
 	HeapTuple	rettuple;
+	HeapTuple	heaptup1 = NULL;
+	HeapTuple	heaptup2 = NULL;
+	ZHeapTuple	ztuple;
 	Buffer		buffer1 = InvalidBuffer;
 	Buffer		buffer2 = InvalidBuffer;
+	ItemPointerData	tid;
 	int			tgindx;
+	bool		found;
 
 	/*
 	 * Locate trigger in trigdesc.
@@ -4323,9 +4331,36 @@ AfterTriggerExecute(AfterTriggerEvent event,
 		default:
 			if (ItemPointerIsValid(&(event->ate_ctid1)))
 			{
-				ItemPointerCopy(&(event->ate_ctid1), &(tuple1.t_self));
-				if (!heap_fetch(rel, SnapshotAny, &tuple1, &buffer1, false, NULL))
+				if (RelationStorageIsZHeap(rel))
+				{
+					ItemPointerCopy(&(event->ate_ctid1), &tid);
+
+					/*
+					 * If the tid of the oldtuple is same as the new tuple
+					 * then fetch the oldtuple from undo otherwise directly
+					 * from the page.
+					 */
+					if (ItemPointerIsValid(&(event->ate_ctid2)) &&
+						ItemPointerEquals(&(event->ate_ctid2), &tid))
+						found = zheap_fetch_undo(rel, SnapshotAny, &tid,
+												 &ztuple, &buffer1, NULL);
+					else
+						found = zheap_fetch(rel, SnapshotAny, &tid, &ztuple,
+											&buffer1, false, NULL);
+
+					heaptup1 = zheap_to_heap(ztuple, rel->rd_att);
+					zheap_freetuple(ztuple);
+					tuple1 = *heaptup1;
+				}
+				else
+				{
+					ItemPointerCopy(&(event->ate_ctid1), &(tuple1.t_self));
+					found = heap_fetch(rel, SnapshotAny, &tuple1, &buffer1, false, NULL);
+				}
+
+				if (!found)
 					elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
+
 				LocTriggerData.tg_trigtuple = &tuple1;
 				LocTriggerData.tg_trigtuplebuf = buffer1;
 			}
@@ -4340,8 +4375,22 @@ AfterTriggerExecute(AfterTriggerEvent event,
 				AFTER_TRIGGER_2CTID &&
 				ItemPointerIsValid(&(event->ate_ctid2)))
 			{
-				ItemPointerCopy(&(event->ate_ctid2), &(tuple2.t_self));
-				if (!heap_fetch(rel, SnapshotAny, &tuple2, &buffer2, false, NULL))
+				if (RelationStorageIsZHeap(rel))
+				{
+					ItemPointerCopy(&(event->ate_ctid2), &tid);
+					found = zheap_fetch(rel, SnapshotAny, &tid, &ztuple,
+										&buffer2, false, NULL);
+					heaptup2 = zheap_to_heap(ztuple, rel->rd_att);
+					zheap_freetuple(ztuple);
+					tuple2 = *heaptup2;
+				}
+				else
+				{
+					ItemPointerCopy(&(event->ate_ctid2), &(tuple2.t_self));
+					found = heap_fetch(rel, SnapshotAny, &tuple2, &buffer2, false, NULL);
+				}
+
+				if (!found)
 					elog(ERROR, "failed to fetch tuple2 for AFTER trigger");
 				LocTriggerData.tg_newtuple = &tuple2;
 				LocTriggerData.tg_newtuplebuf = buffer2;
@@ -4407,6 +4456,14 @@ AfterTriggerExecute(AfterTriggerEvent event,
 		ReleaseBuffer(buffer1);
 	if (buffer2 != InvalidBuffer)
 		ReleaseBuffer(buffer2);
+
+	/*
+	 * Release tuple
+	 */
+	if (heaptup1 != NULL)
+		heap_freetuple(heaptup1);
+	if (heaptup2 != NULL)
+		heap_freetuple(heaptup2);
 
 	/*
 	 * If doing EXPLAIN ANALYZE, stop charging time to this trigger, and count
