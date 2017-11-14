@@ -987,6 +987,7 @@ check_tup_satisfies_update:
 			   result == HeapTupleUpdated ||
 			   result == HeapTupleBeingUpdated);
 		Assert(zheaptup.t_data->t_infomask & ZHEAP_DELETED ||
+				zheaptup.t_data->t_infomask & ZHEAP_UPDATED ||
 			   zheaptup.t_data->t_infomask & ZHEAP_INPLACE_UPDATED);
 		hufd->ctid = ctid;
 		hufd->xmax = tup_xid;
