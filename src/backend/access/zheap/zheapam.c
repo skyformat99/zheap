@@ -1706,6 +1706,7 @@ reacquire_buffer:
 		new_undorecord.uur_tsid = relation->rd_node.spcNode;
 		new_undorecord.uur_fork = MAIN_FORKNUM;
 		new_undorecord.uur_blkprev = prev_urecptr;
+		new_undorecord.uur_block = BufferGetBlockNumber(newbuf);
 		new_undorecord.uur_payload.len = 0;
 		new_undorecord.uur_tuple.len = 0;
 
@@ -1769,7 +1770,6 @@ reacquire_buffer:
 									   (char *) &newtup->t_self,
 									   sizeof(ItemPointerData));
 
-		new_undorecord.uur_block = ItemPointerGetBlockNumber(&(newtup->t_self));
 		new_undorecord.uur_offset = ItemPointerGetOffsetNumber(&(newtup->t_self));
 	}
 
