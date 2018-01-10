@@ -109,6 +109,11 @@
  *
  * tts_slow/tts_off are saved state for slot_deform_tuple, and should not
  * be touched by any other code.
+ *
+ * For page mode scan of zheap table, locally stored per page tuples are
+ * freed once we move to new page or at end of scan. The tts_shouldFreeZtup
+ * will be set false for such tuples. The tts_shouldFreeZtup is set true
+ * only for single tuple scan mode.
  *----------
  */
 typedef struct TupleTableSlot
@@ -117,24 +122,25 @@ typedef struct TupleTableSlot
 	bool		tts_isempty;	/* true = slot is empty */
 	bool		tts_shouldFree; /* should pfree tts_tuple? */
 	bool		tts_shouldFreeMin;	/* should pfree tts_mintuple? */
-#define FIELDNO_TUPLETABLESLOT_SLOW 4
+	bool		tts_shouldFreeZtup;	/* should pfree tts_ztuple? */
+#define FIELDNO_TUPLETABLESLOT_SLOW 5
 	bool		tts_slow;		/* saved state for slot_deform_tuple */
-#define FIELDNO_TUPLETABLESLOT_TUPLE 5
+#define FIELDNO_TUPLETABLESLOT_TUPLE 6
 	HeapTuple	tts_tuple;		/* physical tuple, or NULL if virtual */
 	ZHeapTuple      tts_ztuple;
-#define FIELDNO_TUPLETABLESLOT_TUPLEDESCRIPTOR 7
+#define FIELDNO_TUPLETABLESLOT_TUPLEDESCRIPTOR 8
 	TupleDesc	tts_tupleDescriptor;	/* slot's tuple descriptor */
 	MemoryContext tts_mcxt;		/* slot itself is in this context */
 	Buffer		tts_buffer;		/* tuple's buffer, or InvalidBuffer */
-#define FIELDNO_TUPLETABLESLOT_NVALID 9
+#define FIELDNO_TUPLETABLESLOT_NVALID 11
 	int			tts_nvalid;		/* # of valid values in tts_values */
-#define FIELDNO_TUPLETABLESLOT_VALUES 10
+#define FIELDNO_TUPLETABLESLOT_VALUES 12
 	Datum	   *tts_values;		/* current per-attribute values */
-#define FIELDNO_TUPLETABLESLOT_ISNULL 11
+#define FIELDNO_TUPLETABLESLOT_ISNULL 13
 	bool	   *tts_isnull;		/* current per-attribute isnull flags */
 	MinimalTuple tts_mintuple;	/* minimal tuple, or NULL if none */
 	HeapTupleData tts_minhdr;	/* workspace for minimal-tuple-only case */
-#define FIELDNO_TUPLETABLESLOT_OFF 14
+#define FIELDNO_TUPLETABLESLOT_OFF 16
 	uint32		tts_off;		/* saved state for slot_deform_tuple */
 	bool		tts_fixedTupleDescriptor; /* descriptor can't be changed */
 } TupleTableSlot;

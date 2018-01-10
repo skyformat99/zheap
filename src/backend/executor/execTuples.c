@@ -133,6 +133,7 @@ MakeTupleTableSlot(TupleDesc tupleDesc)
 	slot->tts_isempty = true;
 	slot->tts_shouldFree = false;
 	slot->tts_shouldFreeMin = false;
+	slot->tts_shouldFreeZtup = false;
 	slot->tts_tuple = NULL;
 	slot->tts_fixedTupleDescriptor = tupleDesc != NULL;
 	slot->tts_tupleDescriptor = tupleDesc;
@@ -437,6 +438,8 @@ ExecStoreZTuple(ZHeapTuple tuple,
 	 * Free any old physical tuple belonging to the slot.
 	 */
 	if (slot->tts_shouldFree)
+		heap_freetuple(slot->tts_tuple);
+	if (slot->tts_shouldFreeZtup)
 		zheap_freetuple(slot->tts_ztuple);
 	if (slot->tts_shouldFreeMin)
 		heap_free_minimal_tuple(slot->tts_mintuple);
@@ -445,7 +448,8 @@ ExecStoreZTuple(ZHeapTuple tuple,
 	 * Store the new tuple into the specified slot.
 	 */
 	slot->tts_isempty = false;
-	slot->tts_shouldFree = shouldFree;
+	slot->tts_shouldFreeZtup = shouldFree;
+	slot->tts_shouldFree = false;
 	slot->tts_shouldFreeMin = false;
 	slot->tts_ztuple = tuple;
 	slot->tts_tuple = NULL;
@@ -500,6 +504,13 @@ ExecStoreMinimalTuple(MinimalTuple mtup,
 	 */
 	if (slot->tts_shouldFree)
 		heap_freetuple(slot->tts_tuple);
+
+	if (slot->tts_shouldFreeZtup)
+	{
+		zheap_freetuple(slot->tts_ztuple);
+		slot->tts_ztuple = NULL;
+	}
+
 	if (slot->tts_shouldFreeMin)
 		heap_free_minimal_tuple(slot->tts_mintuple);
 
@@ -516,6 +527,7 @@ ExecStoreMinimalTuple(MinimalTuple mtup,
 	 */
 	slot->tts_isempty = false;
 	slot->tts_shouldFree = false;
+	slot->tts_shouldFreeZtup = false;
 	slot->tts_shouldFreeMin = shouldFree;
 	slot->tts_tuple = &slot->tts_minhdr;
 	slot->tts_mintuple = mtup;
@@ -550,12 +562,9 @@ ExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 	 * Free the old physical tuple if necessary.
 	 */
 	if (slot->tts_shouldFree)
-	{
-		if (slot->tts_ztuple != NULL)
-			zheap_freetuple(slot->tts_ztuple);
-		else
-			heap_freetuple(slot->tts_tuple);
-	}
+		heap_freetuple(slot->tts_tuple);
+	if (slot->tts_shouldFreeZtup)
+		zheap_freetuple(slot->tts_ztuple);
 	if (slot->tts_shouldFreeMin)
 		heap_free_minimal_tuple(slot->tts_mintuple);
 
@@ -563,6 +572,7 @@ ExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 	slot->tts_tuple = NULL;
 	slot->tts_mintuple = NULL;
 	slot->tts_shouldFree = false;
+	slot->tts_shouldFreeZtup = false;
 	slot->tts_shouldFreeMin = false;
 
 	/*
@@ -976,10 +986,10 @@ ExecMaterializeZSlot(TupleTableSlot *slot)
 	Assert(!slot->tts_isempty);
 
 	/*
-	 * If we have a regular physical tuple, and it's locally palloc'd, we have
-	 * nothing to do.
+	 * If we have a regular physical tuple, and it's locally palloc'd (which
+	 * is always true in case of zheap), we have  nothing to do.
 	 */
-	if (slot->tts_ztuple && slot->tts_shouldFree)
+	if (slot->tts_ztuple)
 		return slot->tts_ztuple;
 
 	/*
@@ -991,7 +1001,7 @@ ExecMaterializeZSlot(TupleTableSlot *slot)
 	 */
 	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
 	slot->tts_ztuple = ExecCopySlotZTuple(slot);
-	slot->tts_shouldFree = true;
+	slot->tts_shouldFreeZtup = true;
 	MemoryContextSwitchTo(oldContext);
 
 	/*
