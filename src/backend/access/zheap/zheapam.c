@@ -4597,9 +4597,7 @@ zheapgetpage(HeapScanDesc scan, BlockNumber page)
  */
 static ZHeapTuple
 zheapgettup_pagemode(HeapScanDesc scan,
-					 ScanDirection dir,
-					 int nkeys,
-					 ScanKey key)
+					 ScanDirection dir)
 {
 	ZHeapTuple	tuple = scan->rs_cztup;
 	bool		backward = ScanDirectionIsBackward(dir);
@@ -4729,30 +4727,6 @@ zheapgettup_pagemode(HeapScanDesc scan,
 		while (linesleft > 0)
 		{
 			tuple = scan->rs_visztuples[lineindex];
-
-			/*
-			 * if current tuple qualifies, return it.
-			 * Fixme - Key test needs to be implemented for zheap.
-			 */
-			Assert(key == NULL);
-			/* if (key != NULL)
-			{
-				bool		valid;
-
-				HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
-							nkeys, key, valid);
-				if (valid)
-				{
-					scan->rs_cindex = lineindex;
-					return;
-				}
-			}
-			else
-			{
-				scan->rs_cindex = lineindex;
-				return;
-			} */
-
 			scan->rs_cindex = lineindex;
 			return tuple;
 			/*
@@ -4838,9 +4812,7 @@ zheapgettup_pagemode(HeapScanDesc scan,
  */
 static ZHeapTuple
 zheapgettup(HeapScanDesc scan,
-		   ScanDirection dir,
-		   int nkeys,
-		   ScanKey key)
+		   ScanDirection dir)
 {
 	ZHeapTuple	tuple = scan->rs_cztup;
 	Snapshot	snapshot = scan->rs_snapshot;
@@ -5008,11 +4980,6 @@ zheapgettup(HeapScanDesc scan,
 				/* CheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
 												buffer, snapshot); */
 
-				/* FIXME - Implement Key Test for zheap */
-				/* if (valid && key != NULL)
-					HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
-								nkeys, key, valid); */
-
 				if (valid)
 				{
 					LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
@@ -5139,11 +5106,16 @@ zheap_getnext(HeapScanDesc scan, ScanDirection direction)
 
 	ZHEAPDEBUG_1;				/* zheap_getnext( info ) */
 
+	/*
+	 * The key will be passed only for catalog table scans and catalog tables
+	 * are always a heap table!. So incase of zheap it should be set to NULL.
+	 */
+	Assert (scan->rs_key == NULL);
+
 	if (scan->rs_pageatatime)
-		zhtup = zheapgettup_pagemode(scan, direction,
-							scan->rs_nkeys, scan->rs_key);
+		zhtup = zheapgettup_pagemode(scan, direction);
 	else
-		zhtup = zheapgettup(scan, direction, scan->rs_nkeys, scan->rs_key);
+		zhtup = zheapgettup(scan, direction);
 
 	if (zhtup == NULL)
 	{
