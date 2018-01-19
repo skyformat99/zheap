@@ -1921,6 +1921,9 @@ reacquire_buffer:
 	/* be tidy */
 	pfree(undorecord.uur_tuple.data);
 
+	if (!use_inplace_update)
+		pfree(undorecord.uur_payload.data);
+
 	if (newbuf != buffer)
 		LockBuffer(newbuf, BUFFER_LOCK_UNLOCK);
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
@@ -1948,6 +1951,10 @@ reacquire_buffer:
 	pgstat_count_heap_update(relation, use_inplace_update);
 
 	data_alignment_zheap = 1;
+
+	bms_free(inplace_upd_attrs);
+	bms_free(interesting_attrs);
+	bms_free(modified_attrs);
 
 	return HeapTupleMayBeUpdated;
 }
