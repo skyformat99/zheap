@@ -2734,12 +2734,21 @@ CopyFrom(CopyState cstate)
 			 * We might need to convert from the parent rowtype to the
 			 * partition rowtype.
 			 */
-			tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
-											  tuple,
-											  proute->partition_tuple_slot,
-											  &slot);
+			if (RelationStorageIsZHeap(cstate->rel))
+				ztuple = ConvertPartitionZTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
+								  ztuple,
+								  proute->partition_tuple_slot,
+								  &slot);
+			else
+				tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
+												  tuple,
+												  proute->partition_tuple_slot,
+												  &slot);
 
-			tuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+			if (RelationStorageIsZHeap(cstate->rel))
+				ztuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+			else
+				tuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
 		}
 
 		skip_tuple = false;

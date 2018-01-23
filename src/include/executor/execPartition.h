@@ -208,5 +208,9 @@ extern PartitionPruneState *ExecSetupPartitionPruneState(PlanState *planstate,
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
 								int nsubnodes);
+extern ZHeapTuple ConvertPartitionZTupleSlot(TupleConversionMap *map,
+						  ZHeapTuple tuple,
+						  TupleTableSlot *new_slot,
+						  TupleTableSlot **p_my_slot);
 
 #endif							/* EXECPARTITION_H */

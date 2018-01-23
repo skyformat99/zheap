@@ -794,6 +794,31 @@ ConvertPartitionTupleSlot(TupleConversionMap *map,
 }
 
 /*
+ * ConvertPartitionZTupleSlot - same as above but convert zheap tuple
+ */
+ZHeapTuple
+ConvertPartitionZTupleSlot(TupleConversionMap *map,
+						  ZHeapTuple tuple,
+						  TupleTableSlot *new_slot,
+						  TupleTableSlot **p_my_slot)
+{
+	if (!map)
+		return tuple;
+
+	tuple = do_convert_ztuple(tuple, map);
+
+	/*
+	 * Change the partition tuple slot descriptor, as per converted tuple.
+	 */
+	*p_my_slot = new_slot;
+	Assert(new_slot != NULL);
+	ExecSetSlotDescriptor(new_slot, map->outdesc);
+	ExecStoreZTuple(tuple, new_slot, InvalidBuffer, true);
+
+	return tuple;
+}
+
+/*
  * ExecCleanupTupleRouting -- Clean up objects allocated for partition tuple
  * routing.
  *
