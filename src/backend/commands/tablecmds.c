@@ -8600,8 +8600,11 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	TupleDesc	tupdesc;
 	HeapScanDesc scan;
 	HeapTuple	tuple;
+	ZHeapTuple	ztuple;
 	ExprContext *econtext;
 	MemoryContext oldcxt;
+	MemoryContext tupcxt;
+	MemoryContext vldcxt = NULL;
 	TupleTableSlot *slot;
 	Form_pg_constraint constrForm;
 	bool		isnull;
@@ -8614,6 +8617,15 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
+
+	/*
+	 * Set up a working context so that we can easily free the memory
+	 * getting created by zheap_getnext() function.
+	 */
+	if (RelationStorageIsZHeap(rel))
+		vldcxt = AllocSetContextCreate(CurrentMemoryContext,
+									   "Validate Constraint",
+									   ALLOCSET_DEFAULT_SIZES);
 
 	constrForm = (Form_pg_constraint) GETSTRUCT(constrtup);
 
@@ -8639,7 +8651,9 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	econtext->ecxt_scantuple = slot;
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = heap_beginscan(rel, snapshot, 0, NULL);
+	scan = (RelationStorageIsZHeap(rel)) ?
+			zheap_beginscan(rel, snapshot, 0, NULL) :
+			heap_beginscan(rel, snapshot, 0, NULL);
 
 	/*
 	 * Switch to per-tuple memory context and reset it for each tuple
@@ -8647,8 +8661,25 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	 */
 	oldcxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while (true)
 	{
+		if (RelationStorageIsZHeap(rel))
+		{
+			/*
+			 * See ATRewriteTable to know why we have to switch memory context
+			 * here.
+			 */
+			tupcxt = MemoryContextSwitchTo(vldcxt);
+			ztuple = zheap_getnext(scan, ForwardScanDirection);
+			vldcxt = MemoryContextSwitchTo(tupcxt);
+			tuple = (ztuple) ? zheap_to_heap(ztuple, rel->rd_att) : NULL;
+		}
+		else
+			tuple = heap_getnext(scan, ForwardScanDirection);
+
+		if (!tuple)
+			break;
+
 		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 
 		if (!ExecCheck(exprstate, econtext))
@@ -8662,6 +8693,11 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	}
 
 	MemoryContextSwitchTo(oldcxt);
+	if (vldcxt)
+	{
+		MemoryContextDelete(vldcxt);
+		vldcxt = NULL;
+	}
 	heap_endscan(scan);
 	UnregisterSnapshot(snapshot);
 	ExecDropSingleTupleTableSlot(slot);
