@@ -13,6 +13,7 @@
 */
 #include "postgres.h"
 
+#include "access/zheaputils.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
@@ -641,12 +642,14 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		Expr	   *partition_constraint;
 		EState	   *estate;
 		HeapTuple	tuple;
+		ZHeapTuple	ztuple;
 		ExprState  *partqualstate = NULL;
 		Snapshot	snapshot;
 		TupleDesc	tupdesc;
 		ExprContext *econtext;
 		HeapScanDesc scan;
 		MemoryContext oldCxt;
+		MemoryContext zheapCxt;
 		TupleTableSlot *tupslot;
 
 		/* Lock already taken above. */
@@ -704,17 +707,47 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 
 		econtext = GetPerTupleExprContext(estate);
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(part_rel, snapshot, 0, NULL);
+
 		tupslot = MakeSingleTupleTableSlot(tupdesc);
 
-		/*
-		 * Switch to per-tuple memory context and reset it for each tuple
-		 * produced, so we don't leak memory.
-		 */
-		oldCxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		if (RelationStorageIsZHeap(part_rel))
 		{
+			scan = zheap_beginscan(part_rel, snapshot, 0, NULL);
+
+			/*
+			 * For zheap, create new context instead of using the per-tuple
+			 * memory context to avoid freeing of memory allocated by
+			 * zheap_getnext when ResetExprContext() is called.
+			 */
+			zheapCxt = AllocSetContextCreate(CurrentMemoryContext,
+											 "zheap tuples cxt",
+											 ALLOCSET_DEFAULT_SIZES);
+			oldCxt = MemoryContextSwitchTo(zheapCxt);
+		}
+		else
+		{
+			scan = heap_beginscan(part_rel, snapshot, 0, NULL);
+			/*
+			 * Switch to per-tuple memory context and reset it for each tuple
+			 * produced, so we don't leak memory.
+			 */
+			oldCxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		}
+
+		while (true)
+		{
+			if (RelationStorageIsZHeap(part_rel))
+			{
+				ztuple = zheap_getnext(scan, ForwardScanDirection);
+
+				tuple = ztuple ? zheap_to_heap(ztuple, part_rel->rd_att) : NULL;
+			}
+			else
+				tuple = heap_getnext(scan, ForwardScanDirection);
+
+			if (tuple == NULL)
+				break;
+
 			ExecStoreTuple(tuple, tupslot, InvalidBuffer, false);
 			econtext->ecxt_scantuple = tupslot;
 
@@ -723,12 +756,15 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 						(errcode(ERRCODE_CHECK_VIOLATION),
 						 errmsg("updated partition constraint for default partition \"%s\" would be violated by some row",
 								RelationGetRelationName(default_rel))));
-
 			ResetExprContext(econtext);
 			CHECK_FOR_INTERRUPTS();
 		}
 
 		MemoryContextSwitchTo(oldCxt);
+
+		if (RelationStorageIsZHeap(part_rel))
+			MemoryContextDelete(zheapCxt);
+
 		heap_endscan(scan);
 		UnregisterSnapshot(snapshot);
 		ExecDropSingleTupleTableSlot(tupslot);
