@@ -789,7 +789,6 @@ reacquire_buffer:
 		recptr = XLogInsert(RM_ZHEAP_ID, info);
 
 		PageSetLSN(page, recptr);
-		SetUndoPageLSNs(recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -4198,7 +4197,6 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 
 			recptr = XLogInsert(RM_ZHEAP_ID, XLOG_ZHEAP_FREEZE_XACT_SLOT);
 			PageSetLSN(page, recptr);
-			SetUndoPageLSNs(recptr);
 		}
 
 		END_CRIT_SECTION();
@@ -4489,7 +4487,6 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 
 			recptr = XLogInsert(RM_ZHEAP_ID, XLOG_ZHEAP_INVALID_XACT_SLOT);
 			PageSetLSN(page, recptr);
-			SetUndoPageLSNs(recptr);
 		}
 
 		END_CRIT_SECTION();
