@@ -3204,7 +3204,7 @@ XactPerformUndoActionsIfPending()
 	 * execute undo actions, otherwise we execute undo actions under parent
 	 * transaction.
 	 */
-	if (s->transactionId == InvalidTransactionId)
+	if (GetTopTransactionIdIfAny() == InvalidTransactionId)
 	{
 		TransactionState xact;
 
