@@ -2198,7 +2198,7 @@ CommitTransaction(void)
  * NB: if you change this routine, better look at CommitTransaction too!
  */
 static void
-PrepareTransaction(void)
+PrepareTransaction(UndoRecPtr start_urec_ptr, UndoRecPtr end_urec_ptr)
 {
 	TransactionState s = CurrentTransactionState;
 	TransactionId xid = GetCurrentTransactionId();
@@ -2346,7 +2346,7 @@ PrepareTransaction(void)
 	 * PREPARED; in particular, pay attention to whether things should happen
 	 * before or after releasing the transaction's locks.
 	 */
-	StartPrepare(gxact);
+	StartPrepare(gxact, start_urec_ptr, end_urec_ptr);
 
 	AtPrepare_Notify();
 	AtPrepare_Locks();
@@ -2776,6 +2776,8 @@ void
 CommitTransactionCommand(void)
 {
 	TransactionState s = CurrentTransactionState;
+	UndoRecPtr end_urec_ptr = s->latest_urec_ptr;
+	UndoRecPtr	start_urec_ptr = s->start_urec_ptr;
 
 	switch (s->blockState)
 	{
@@ -2865,7 +2867,7 @@ CommitTransactionCommand(void)
 			 * return to the idle state.
 			 */
 		case TBLOCK_PREPARE:
-			PrepareTransaction();
+			PrepareTransaction(start_urec_ptr, end_urec_ptr);
 			s->blockState = TBLOCK_DEFAULT;
 			break;
 
@@ -2911,6 +2913,20 @@ CommitTransactionCommand(void)
 			{
 				CommitSubTransaction();
 				s = CurrentTransactionState;	/* changed by pop */
+
+				/*
+				 * Update the end undo record pointer if it's not valid with
+				 * the currently popped transaction's end undo record pointer.
+				 * This is particularly required when the first command of
+				 * the transaction is of type which does not require an undo,
+				 * e.g. savepoint x.
+				 * Accordingly, update the start undo record pointer.
+				 */
+				if (!UndoRecPtrIsValid(end_urec_ptr))
+					end_urec_ptr = s->latest_urec_ptr;
+
+				if (UndoRecPtrIsValid(s->start_urec_ptr))
+					start_urec_ptr = s->start_urec_ptr;
 			} while (s->blockState == TBLOCK_SUBCOMMIT);
 			/* If we had a COMMIT command, finish off the main xact too */
 			if (s->blockState == TBLOCK_END)
@@ -2922,7 +2938,7 @@ CommitTransactionCommand(void)
 			else if (s->blockState == TBLOCK_PREPARE)
 			{
 				Assert(s->parent == NULL);
-				PrepareTransaction();
+				PrepareTransaction(start_urec_ptr, end_urec_ptr);
 				s->blockState = TBLOCK_DEFAULT;
 			}
 			else
