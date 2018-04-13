@@ -5686,7 +5686,20 @@ ZHeapPageGetCtid(int trans_slot, Buffer buf, ItemPointer ctid)
 	 */
 	Assert(urec);
 
-	*ctid = *(ItemPointer) urec->uur_payload.data;
+	/*
+	 * The tuple should be deleted/updated previously. Else, the caller should
+	 * not be calling this function.
+	 */
+	Assert(urec->uur_type == UNDO_DELETE || urec->uur_type == UNDO_UPDATE);
+
+	/*
+	 * For a deleted tuple, ctid refers to self.
+	 */
+	if (urec->uur_type != UNDO_DELETE)
+	{
+		Assert(urec->uur_payload.len > 0);
+		*ctid = *(ItemPointer) urec->uur_payload.data;
+	}
 
 	UndoRecordRelease(urec);
 }
