@@ -302,6 +302,7 @@ extern uint16 UndoLogGetPrevLen(UndoLogNumber logno);
 extern bool NeedUndoMetaLog(XLogRecPtr redo_point);
 extern void UndoLogSetLSN(XLogRecPtr lsn);
 extern void LogUndoMetaData(xl_undolog_meta *xlrec);
+void UndoLogNewSegment(UndoLogNumber logno, Oid tablespace, int segno);
 /* Redo interface. */
 extern void undolog_redo(XLogReaderState *record);
 
