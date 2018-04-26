@@ -3029,7 +3029,7 @@ IndexBuildZHeapRangeScan(Relation zheapRelation,
 		else
 		{
 			snapshot = SnapshotAny;
-			OldestXmin = GetOldestXmin(zheapRelation, true);
+			OldestXmin = GetOldestXmin(zheapRelation, PROCARRAY_FLAGS_VACUUM);
 		}
 
 		scan = zheap_beginscan_strat(zheapRelation,		/* relation */
