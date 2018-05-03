@@ -7655,7 +7655,6 @@ CopyTupleFromUndoRecord(UnpackedUndoRecord	*urec, ZHeapTuple zhtup,
 	switch (urec->uur_type)
 	{
 		case UNDO_INSERT:
-		case UNDO_MULTI_INSERT:
 			{
 				Assert(zhtup != NULL);
 
@@ -7663,8 +7662,10 @@ CopyTupleFromUndoRecord(UnpackedUndoRecord	*urec, ZHeapTuple zhtup,
 				 * We need to deal with undo of root tuple only for a special
 				 * case where during non-inplace update operation, we
 				 * propagate the lockers information to the freshly inserted
-				 * tuple.
+				 * tuple. But, we've to make sure the inserted tuple is locked only.
 				 */
+				Assert(ZHEAP_XID_IS_LOCKED_ONLY(zhtup->t_data->t_infomask));
+
 				undo_tup = palloc(ZHEAPTUPLESIZE + zhtup->t_len);
 				undo_tup->t_data = (ZHeapTupleHeader) ((char *) undo_tup + ZHEAPTUPLESIZE);
 
@@ -7764,6 +7765,11 @@ CopyTupleFromUndoRecord(UnpackedUndoRecord	*urec, ZHeapTuple zhtup,
 			break;
 		default:
 			elog(ERROR, "unsupported undo record type");
+			/*
+			 * During tests, we take down the server to notice the error easily.
+			 * This can be removed later.
+			 */
+			Assert(0);
 	}
 
 	return undo_tup;
