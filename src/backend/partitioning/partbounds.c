@@ -649,7 +649,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		ExprContext *econtext;
 		HeapScanDesc scan;
 		MemoryContext oldCxt;
-		MemoryContext zheapCxt;
+		MemoryContext zheapCxt = NULL;
 		TupleTableSlot *tupslot;
 
 		/* Lock already taken above. */
