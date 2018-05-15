@@ -179,6 +179,7 @@ struct
 char	   *undo_tablespaces = NULL;
 
 static UndoLogControl *get_undo_log_by_number(UndoLogNumber logno);
+static UndoLogControl *get_undo_log_by_number_unlocked(UndoLogNumber logno);
 static void ensure_undo_log_number(UndoLogNumber logno);
 static void attach_undo_log(UndoPersistence level, Oid tablespace);
 static void detach_current_undo_log(UndoPersistence level, bool exhausted);
@@ -285,44 +286,40 @@ UndoLogSegmentPath(UndoLogNumber logno, int segno, Oid tablespace, char *path)
 }
 
 /*
- * Iterate through the set of currently active logs.
+ * Iterate through the set of currently active logs.  Pass in NULL to get the
+ * first undo log.  NULL indicates the end of the set of logs.
  *
- * TODO: This probably needs to be replaced.  For the use of UndoDiscard,
+ * TODO: This probably needs to be replaced.  For the use of undo workers,
  * maybe we should instead have an ordered data structure organized by
  * oldest_xid so that undo workers only have to consume logs from one end of
- * the queue when they have an oldest xmin.  For the use of undo_file.c we'll
- * need something completely different anyway (watch this space).  For now we
- * just stupidly visit all undo logs in the range [log_logno, high_logno),
- * which is obviously not ideal.
+ * the queue when they have an oldest xmin.
  */
 UndoLogControl *
 UndoLogNext(UndoLogControl *log)
 {
 	UndoLogSharedData *shared = MyUndoLogState.shared;
+	UndoLogNumber logno;
+	UndoLogNumber high_logno;
 
 	if (log == NULL)
+		return get_undo_log_by_number(InvalidUndoLogNumber);
+
+	LWLockAcquire(UndoLogLock, LW_SHARED);
+	high_logno = shared->high_logno;
+	LWLockRelease(UndoLogLock);
+
+	/*
+	 * It's possible that individual logs have been entirely discarded, so we
+	 * have to be ready to skip NULLs.
+	 */
+	for (logno = log->logno + 1; logno < high_logno; ++logno)
 	{
-		UndoLogNumber low_logno;
-
-		LWLockAcquire(UndoLogLock, LW_SHARED);
-		low_logno = shared->low_logno;
-		LWLockRelease(UndoLogLock);
-
-		return get_undo_log_by_number(low_logno);
+		log = get_undo_log_by_number(logno);
+		if (log != NULL)
+			return log;
 	}
-	else
-	{
-		UndoLogNumber high_logno;
 
-		LWLockAcquire(UndoLogLock, LW_SHARED);
-		high_logno = shared->high_logno;
-		LWLockRelease(UndoLogLock);
-
-		if (log->logno + 1 == high_logno)
-			return NULL;
-
-		return get_undo_log_by_number(log->logno + 1);
-	}
+	return NULL;
 }
 
 /*
@@ -344,11 +341,7 @@ UndoLogIsDiscarded(UndoRecPtr point)
 	if (log == NULL)
 		return true;
 
-	/*
-	 * XXX For a super cheap locked operation, it's better to use LW_EXLUSIVE
-	 * even though we don't need exclusivity, right?
-	 */
-	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&log->mutex, LW_SHARED);
 	result = UndoRecPtrGetOffset(point) < log->meta.discard;
 	LWLockRelease(&log->mutex);
 
@@ -622,8 +615,7 @@ UndoLogNewSegment(UndoLogNumber logno, Oid tablespace, int segno)
 }
 
 /*
- * Create and zero-fill a new segment for the undo log we are currently
- * attached to.
+ * Create and zero-fill a new segment for a given undo log number.
  */
 static void
 extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
@@ -667,7 +659,7 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	 * src/backend/access/transam/README.  This means that it's possible for
 	 * us to crash having made some or all of the filesystem changes but
 	 * before WAL logging, but in that case we'll eventually try to create the
-	 * same segment(s) again which is tolerated.
+	 * same segment(s) again, which is tolerated.
 	 */
 	if (!InRecovery)
 	{
@@ -1159,7 +1151,10 @@ UndoRecPtrGetTablespace(UndoRecPtr ptr)
 
 	/*
 	 * No need to acquire log->mutex, because log->meta.tablespace is constant
-	 * for the lifetime of the log.  TODO:  will it always be?  No I'm going to change that!
+	 * for the lifetime of the log.  In future, we might change
+	 * DropUndoLogsInTablespace() so that it discards only up the next segment
+	 * file but then allows the undo log to be reused for another tablespace,
+	 * and then we might need to reconsider this.
 	 */
 	if (log != NULL)
 		return log->meta.tablespace;
@@ -1316,7 +1311,7 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 	{
 		UndoLogControl *log;
 
-		log = get_undo_log_by_number(shared->low_logno);
+		log = get_undo_log_by_number_unlocked(shared->low_logno);
 		if (log->meta.status != UNDO_LOG_STATUS_DISCARDED)
 			break;
 
@@ -1363,7 +1358,7 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 		{
 			UndoLogControl *log;
 
-			log = get_undo_log_by_number(logno);
+			log = get_undo_log_by_number_unlocked(logno);
 			if (log == NULL) /* XXX can this happen? */
 				continue;
 
@@ -1575,23 +1570,24 @@ UndoLogSetLSN(XLogRecPtr lsn)
 }
 
 /*
- * Get an UndoLogControl pointer for a given logno.  This may require
- * attaching to a DSM segment if it isn't already attached in this backend.
- * Return NULL if there is no such logno because it has been entirely
- * discarded.
+ * Workhorse for get_undo_log_by_number().  Also callable directly if
+ * UndoLogLock is already held.
  */
 static UndoLogControl *
-get_undo_log_by_number(UndoLogNumber logno)
+get_undo_log_by_number_unlocked(UndoLogNumber logno)
 {
 	UndoLogSharedData *shared = MyUndoLogState.shared;
 	int bankno = UndoLogNoGetBankNo(logno);
 	int slotno = UndoLogNoGetSlotNo(logno);
 
+	Assert(LWLockHeldByMe(UndoLogLock));
+
 	/* See if we need to attach to the bank that holds logno. */
-	if (unlikely(MyUndoLogState.banks[bankno] == NULL))
+	if (MyUndoLogState.banks[bankno] == NULL)
 	{
 		dsm_segment *segment;
 
+		/* See if we need to map in a new bank. */
 		if (shared->banks[bankno] != DSM_HANDLE_INVALID)
 		{
 			segment = dsm_attach(shared->banks[bankno]);
@@ -1603,18 +1599,87 @@ get_undo_log_by_number(UndoLogNumber logno)
 			}
 		}
 
+		/*
+		 * If we didn't manage to find a bank to map in, the undo log we're
+		 * being asked for must be entirely discarded.  In that case we just
+		 * return NULL.
+		 */
 		if (unlikely(MyUndoLogState.banks[bankno] == NULL))
+		{
+			Assert(logno < shared->low_logno);
 			return NULL;
+		}
 	}
 
+	return &MyUndoLogState.banks[bankno][slotno];
+}
+
+/*
+ * Get an UndoLogControl pointer for a given logno.  This may require
+ * attaching to a DSM segment if it isn't already attached in this backend.
+ *
+ * If InvalidUndoLogNumber is passed in, the lowest existing undo log will be
+ * found.  Even if the bank of undo logs is entirely discarded, the returned
+ * pointer remains valid until undolog_bank_gc() is called in the calling
+ * backend.
+ *
+ * Return NULL if there is no such logno because it has been entirely
+ * discarded.  Most callers shouldn't expect to get a NULL, but
+ * UndoLogIsDiscarded() must be ready to received an ancient UndoRecPtr.
+ */
+static UndoLogControl *
+get_undo_log_by_number(UndoLogNumber logno)
+{
+	UndoLogSharedData *shared = MyUndoLogState.shared;
+	int bankno = UndoLogNoGetBankNo(logno);
+	int slotno = UndoLogNoGetSlotNo(logno);
+
+	/* Is it an ancient discarded logno? */
+	if (unlikely(logno != InvalidUndoLogNumber &&
+				 logno < shared->low_logno))
+	{
+		/*
+		 * We opportunistically checked without locking so shared->low_logno
+		 * might be out of date.
+		 */
+		return NULL;
+	}
+
+	/* Is it not currently mapped into this backend? */
+	if (unlikely(logno == InvalidUndoLogNumber ||
+				 MyUndoLogState.banks[bankno] == NULL))
+	{
+		UndoLogControl *log;
+
+		/* We'll have to acquire the lock. */
+		LWLockAcquire(UndoLogLock, LW_SHARED);
+		if (logno == InvalidUndoLogNumber)
+		{
+			if (shared->low_logno == shared->high_logno)
+				log = NULL;
+			else
+				log = get_undo_log_by_number_unlocked(shared->low_logno);
+		}
+		else
+			log = get_undo_log_by_number_unlocked(logno);
+		LWLockRelease(UndoLogLock);
+
+		return log;
+	}
+
+	/* Fast path: it's already mapped in. */
 	return &MyUndoLogState.banks[bankno][slotno];
 }
 
 UndoLogControl *
 UndoLogGet(UndoLogNumber logno)
 {
-	/* TODO just rename the above function */
-	return get_undo_log_by_number(logno);
+	UndoLogControl *log = get_undo_log_by_number(logno);
+
+	if (log == NULL)
+		elog(ERROR, "unknown undo log number %d", logno);
+
+	return log;
 }
 
 /*
@@ -1637,6 +1702,8 @@ initialize_undo_log_bank(int bankno, UndoLogControl *bank)
 /*
  * Create shared memory space for a given undo log number, if it doesn't exist
  * already.
+ *
+ * TODO: review the locking of this function/callers
  */
 static void
 ensure_undo_log_number(UndoLogNumber logno)
@@ -1704,7 +1771,7 @@ attach_undo_log(UndoPersistence persistence, Oid tablespace)
 	place = &shared->free_lists[persistence];
 	while (*place != InvalidUndoLogNumber)
 	{
-		UndoLogControl *candidate = get_undo_log_by_number(*place);
+		UndoLogControl *candidate = get_undo_log_by_number_unlocked(*place);
 
 		if (candidate == NULL)
 			elog(ERROR, "corrupted undo log freelist");
@@ -1738,7 +1805,7 @@ attach_undo_log(UndoPersistence persistence, Oid tablespace)
 		ensure_undo_log_number(logno);
 
 		/* Get new zero-filled UndoLogControl object. */
-		log = get_undo_log_by_number(logno);
+		log = get_undo_log_by_number_unlocked(logno);
 
 		Assert(log->meta.persistence == 0);
 		Assert(log->meta.tablespace == InvalidOid);
