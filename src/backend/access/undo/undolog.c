@@ -3,9 +3,9 @@
  * undolog.c
  *	  management of undo logs
  *
- * PostgreSQL undo log manager.  This module is responsible for lifecycle
- * management of undo logs and backing files, associating undo logs with
- * backends, allocating and managing space within undo logs.
+ * PostgreSQL undo log manager.  This module is responsible for managing the
+ * lifecycle of undo logs and their segment files, associating undo logs with
+ * backends, and allocating space within undo logs.
  *
  * For the code that reads and writes blocks of data, see undofile.c.
  *
@@ -254,15 +254,6 @@ UndoLogDirectory(Oid tablespace, char *dir)
 	else
 		snprintf(dir, MAXPGPATH, "pg_tblspc/%u/%s/undo",
 				 tablespace, TABLESPACE_VERSION_DIRECTORY);
-
-	/* XXX Should we use UndoLogDatabaseOid (9) instead of "undo"? */
-
-	/*
-	 * XXX Should we add an extra directory between log number and segment
-	 * files?  If all undo logs are in the same directory then
-	 * fsync(directory) may create contention in the OS between unrelated
-	 * backends that as they rotate segment files.
-	 */
 }
 
 /*
@@ -288,11 +279,6 @@ UndoLogSegmentPath(UndoLogNumber logno, int segno, Oid tablespace, char *path)
 /*
  * Iterate through the set of currently active logs.  Pass in NULL to get the
  * first undo log.  NULL indicates the end of the set of logs.
- *
- * TODO: This probably needs to be replaced.  For the use of undo workers,
- * maybe we should instead have an ordered data structure organized by
- * oldest_xid so that undo workers only have to consume logs from one end of
- * the queue when they have an oldest xmin.
  */
 UndoLogControl *
 UndoLogNext(UndoLogControl *log)
@@ -365,8 +351,7 @@ UndoLogSetLastXactStartPoint(UndoRecPtr point)
 }
 
 /*
- * Fetch the previous transaction's start undo record point.  Return Invalid
- * undo pointer if backend is not attached to any log.
+ * Fetch the previous transaction's start undo record point.
  */
 UndoRecPtr
 UndoLogGetLastXactStartPoint(UndoLogNumber logno)
@@ -377,7 +362,7 @@ UndoLogGetLastXactStartPoint(UndoLogNumber logno)
 	if (unlikely(log == NULL))
 		return InvalidUndoRecPtr;
 
-	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&log->mutex, LW_SHARED);
 	last_xact_start = log->meta.last_xact_start;
 	LWLockRelease(&log->mutex);
 
@@ -388,8 +373,8 @@ UndoLogGetLastXactStartPoint(UndoLogNumber logno)
 }
 
 /*
- * Store last undo record's length on undo meta so that it can be persistent
- * across restart.
+ * Store the last undo record's length in undo meta-data so that it can be
+ * persistent across restart.
  */
 void
 UndoLogSetPrevLen(UndoLogNumber logno, uint16 prevlen)
@@ -449,7 +434,7 @@ IsTransactionFirstRec(TransactionId xid)
 
 /*
  * Detach from the undo log we are currently attached to, returning it to the
- * free list if it still has space.
+ * appropriate free list if it still has space.
  */
 static void
 detach_current_undo_log(UndoPersistence persistence, bool exhausted)
@@ -468,7 +453,7 @@ detach_current_undo_log(UndoPersistence persistence, bool exhausted)
 		log->meta.status = UNDO_LOG_STATUS_EXHAUSTED;
 	LWLockRelease(&log->mutex);
 
-	/* Push back onto the appropriate freelist. */
+	/* Push back onto the appropriate free list. */
 	if (!exhausted)
 	{
 		LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
@@ -478,6 +463,9 @@ detach_current_undo_log(UndoPersistence persistence, bool exhausted)
 	}
 }
 
+/*
+ * Exit handler, detaching from all undo logs.
+ */
 static void
 undo_log_before_exit(int code, Datum arg)
 {
@@ -491,8 +479,7 @@ undo_log_before_exit(int code, Datum arg)
 }
 
 /*
- * Create a fully allocated empty segment file on disk for the byte starting
- * at 'end'.
+ * Create a new empty segment file on disk for the byte starting at 'end'.
  */
 static void
 allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
@@ -700,33 +687,8 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
  * data is crash safe, the *contents* of the undo log and (indirectly) the
  * insertion point are the responsibility of client code.
  *
- * XXX As an optimization, we could take a third argument 'discard_last'.  If
- * the caller knows that the last transaction it committed is all visible and
- * has its undo pointer, it could supply that value.  Then while we hold
- * log->mutex we could check if log->meta.discard == discard_last, and if it's
- * in the same undo log segment as the current insert then it could cheaply
- * update it in shmem and include the value in the existing
- * XLOG_UNDOLOG_ATTACH WAL record.  We'd be leaving the heavier lifting of
- * dealing with segment roll-over to undo workers, but avoiding work for undo
- * workers by folding a super cheap common case into the next foreground xact.
- * (Not sure how we actually avoid waking up the undo work though...)
- *
- * XXX Problem: if foreground processes can move the discard pointer as well
- * as background processes (undo workers), then how is the undo worker
- * supposed to access the undo data pointed to by the discard pointer so that
- * it can read the xid?  We certainly don't want to hold the undo log lock
- * while doing stuff like that, because it would interfere with read-only
- * sessions that need to check the discard pointer.  Possible solution: we may
- * need a way to 'pin' the discard pointer while the undo worker is
- * considering what to do.  If we add 'discard_last' as described in the
- * previous paragraph, that optimisation would need to be skipped if the
- * foreground process running UndoLogAllocate sees that the discard pointer is
- * currently pinned by a background worker.  Going to sit on this thought for
- * a little while before writing any code... need to contemplate undo workers
- * some more.
- *
- * Returns an undo log insertion point that can be converted to a buffer tag
- * and an insertion point within a buffer page using the macros above.
+ * Return an undo log insertion point that can be converted to a buffer tag
+ * and an insertion point within a buffer page.
  */
 UndoRecPtr
 UndoLogAllocate(size_t size, UndoPersistence persistence, xl_undolog_meta *undometa)
@@ -774,8 +736,7 @@ UndoLogAllocate(size_t size, UndoPersistence persistence, xl_undolog_meta *undom
 		/*
 		 * While we have the lock, check if we have been forcibly detached by
 		 * DROP TABLESPACE.  That can only happen between transactions (see
-		 * DetachUndoLogsInsTablespace()) so we only have to check for it
-		 * in this branch.
+		 * DropUndoLogsInsTablespace()).
 		 */
 		if (log->pid == InvalidPid)
 		{
@@ -805,8 +766,8 @@ UndoLogAllocate(size_t size, UndoPersistence persistence, xl_undolog_meta *undom
 
 	/*
 	 * 'size' is expressed in usable non-header bytes.  Figure out how far we
-	 * have to move insert to create space for 'size' usable bytes (stepping
-	 * over any intervening headers).
+	 * have to move insert to create space for 'size' usable bytes, stepping
+	 * over any intervening headers.
 	 */
 	Assert(log->meta.insert % BLCKSZ >= UndoLogBlockHeaderSize);
 	new_insert = UndoLogOffsetPlusUsableBytes(log->meta.insert, size);
@@ -865,14 +826,14 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 	UndoLogControl *log;
 
 	/*
-	 * The sequence of calls to UndoLogAllocateRecovery during REDO (recovery)
-	 * must match the sequence of calls to UndoLogAllocate during DO, for any
-	 * given session.  The XXX_redo code for any UNDO-generating operation
-	 * must use UndoLogAllocateRecovery rather than UndoLogAllocate, because
-	 * it must supply the extra 'xid' argument so that we can find out which
-	 * undo log number to use.  During DO, that's tracked per-backend, but
-	 * during REDO the original backends/sessions are lost and we have only
-	 * the Xids.
+	 * The sequence of calls to UndoLogAllocateRecovery() during REDO
+	 * (recovery) must match the sequence of calls to UndoLogAllocate during
+	 * DO, for any given session.  The XXX_redo code for any UNDO-generating
+	 * operation must use UndoLogAllocateRecovery() rather than
+	 * UndoLogAllocate(), because it must supply the extra 'xid' argument so
+	 * that we can find out which undo log number to use.  During DO, that's
+	 * tracked per-backend, but during REDO the original backends/sessions are
+	 * lost and we have only the Xids.
 	 */
 	Assert(InRecovery);
 
@@ -891,8 +852,8 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 		elog(ERROR, "cannot find undo log number for xid %u", xid);
 
 	/*
-	 * This log must already have been created by XLOG_UNDOLOG_CREATE records
-	 * emitted by UndoLogAllocate.
+	 * This log must already have been created by an XLOG_UNDOLOG_CREATE
+	 * record emitted by UndoLogAllocate().
 	 */
 	log = get_undo_log_by_number(logno);
 	if (log == NULL)
@@ -900,7 +861,7 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 
 	/*
 	 * This log must already have been extended to cover the requested size by
-	 * XLOG_UNDOLOG_EXTEND records emitted by UndoLogAllocate, or by
+	 * XLOG_UNDOLOG_EXTEND records emitted by UndoLogAllocate(), or by
 	 * XLOG_UNDLOG_DISCARD records recycling segments.
 	 */
 	if (log->meta.end < UndoLogOffsetPlusUsableBytes(log->meta.insert, size))
@@ -957,17 +918,12 @@ UndoLogAdvance(UndoRecPtr insertion_point, size_t size, UndoPersistence persiste
  * relevant buffers to be dropped immediately, without writing any data out to
  * disk.  Any attempt to read the buffers (except a partial buffer at the end
  * of this range which will remain) may result in IO errors, because the
- * underlying segment file may physically removed.
+ * underlying segment file may have been physically removed.
  *
  * Only one backend should call this for a given undo log concurrently, or
  * data structures will become corrupted.  It is expected that the caller will
  * be an undo worker; only one undo worker should be working on a given undo
  * log at a time.
- *
- * XXX Special case for when we wrapped past the end of an undo log, spilling
- * into a new one.  How do we discard that?  Essentially we'll be discarding
- * the whole undo log, but not sure how the caller should know that or deal
- * with it and how this code should handle it.
  */
 void
 UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
@@ -1030,31 +986,16 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		 * than one open at a time.  No backend should ever try to read from
 		 * such a file descriptor; that is what it means when we say that the
 		 * caller of UndoLogDiscard() asserts that there will be no attempts
-		 * to access the discarded range of undo log!  In the case of a
+		 * to access the discarded range of undo log.  In the case of a
 		 * rename, if a backend were to attempt to read undo data in the range
 		 * being discarded, it would read entirely the wrong data.
-		 *
-		 * XXX What defenses could we build against that happening due to
-		 * bugs/corruption?  One way would be for undofile.c to refuse to read
-		 * buffers from before the current discard point, but currently
-		 * undofile.c doesn't need to deal with shmem/locks.  That may be
-		 * false economy, but we really don't want reader to have to wait to
-		 * acquire the undo log lock just to read undo data while we are doing
-		 * filesystem stuff in here.
 		 */
 
 		/*
-		 * XXX Decide how many segments to recycle (= rename from tail
-		 * position to head position).
-		 *
-		 * XXX For now it's always 1 unless there is already a spare one, but
-		 * we could have an adaptive algorithm with the following goals:
-		 *
-		 * (1) handle future workload without having to create new segment
-		 * files from scratch
-		 *
-		 * (2) reduce the rate of fsyncs require for recycling by doing
-		 * several at once
+		 * How many segments should we recycle (= rename from tail position to
+		 * head position)?  For now it's always 1 unless there is already a
+		 * spare one, but we could have an adaptive algorithm that recycles
+		 * multiple segments at a time and pays just one fsync().
 		 */
 		if (log->meta.end - log->meta.insert < UndoLogSegmentSize)
 			recycle = 1;
@@ -1138,16 +1079,14 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	LWLockRelease(&log->mutex);
 }
 
+/*
+ * Get the tablespace for a given UndoRecPtr.
+ */
 Oid
 UndoRecPtrGetTablespace(UndoRecPtr ptr)
 {
 	UndoLogNumber logno = UndoRecPtrGetLogNo(ptr);
 	UndoLogControl *log = get_undo_log_by_number(logno);
-
-	/*
-	 * XXX What should the behaviour of this function be if you ask for the
-	 * tablespace of a discarded log, where even the shmem bank is gone?
-	 */
 
 	/*
 	 * No need to acquire log->mutex, because log->meta.tablespace is constant
@@ -1163,18 +1102,22 @@ UndoRecPtrGetTablespace(UndoRecPtr ptr)
 }
 
 /*
- * Return first valid UndoRecPtr for a given undo logno.  If logno is invalid
- * then return InvalidUndoRecPtr.
+ * Return an UndoRecPtr to the oldest valid data in an undo log, or
+ * InvalidUndoRecPtr if it is empty.
  */
 UndoRecPtr
-UndoLogGetFirstValidRecord(UndoLogNumber logno)
+UndoLogGetFirstValidRecord(UndoLogControl *log)
 {
-	UndoLogControl *log = get_undo_log_by_number(logno);
+	UndoRecPtr	result;
 
-	if (log == NULL || log->meta.discard == log->meta.insert)
-		return InvalidUndoRecPtr;
+	LWLockAcquire(&log->mutex, LW_SHARED);
+	if (log->meta.discard == log->meta.insert)
+		result = InvalidUndoRecPtr;
+	else
+		result = MakeUndoRecPtr(log->logno, log->meta.discard);
+	LWLockRelease(&log->mutex);
 
-	return MakeUndoRecPtr(logno, log->meta.discard);
+	return result;
 }
 
 /*
@@ -1481,7 +1424,10 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		UndoLogControl *log;
 
 		/* Get a zero-initialized control objects. */
+		LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 		ensure_undo_log_number(logno);
+		LWLockRelease(UndoLogLock);
+
 		log = get_undo_log_by_number(logno);
 
 		/* Read in the meta data for this undo log. */
@@ -1702,8 +1648,6 @@ initialize_undo_log_bank(int bankno, UndoLogControl *bank)
 /*
  * Create shared memory space for a given undo log number, if it doesn't exist
  * already.
- *
- * TODO: review the locking of this function/callers
  */
 static void
 ensure_undo_log_number(UndoLogNumber logno)
@@ -1725,6 +1669,8 @@ ensure_undo_log_number(UndoLogNumber logno)
 			}
 			return;
 	}
+
+	Assert(LWLockHeldByMeInMode(UndoLogLock, LW_EXCLUSIVE));
 
 	/* Do we need to create a bank in shared memory for this undo log number? */
 	if (shared->banks[bankno] == DSM_HANDLE_INVALID)
@@ -2460,16 +2406,14 @@ undolog_xlog_create(XLogReaderState *record)
 	UndoLogSharedData *shared = MyUndoLogState.shared;
 
 	/* Create meta-data space in shared memory. */
+	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 	ensure_undo_log_number(xlrec->logno);
-
-	log = get_undo_log_by_number(xlrec->logno);
+	log = get_undo_log_by_number_unlocked(xlrec->logno);
 	log->meta.status = UNDO_LOG_STATUS_ACTIVE;
 	log->meta.persistence = xlrec->persistence;
 	log->meta.tablespace = xlrec->tablespace;
 	log->meta.insert = UndoLogBlockHeaderSize;
 	log->meta.discard = UndoLogBlockHeaderSize;
-
-	LWLockAcquire(UndoLogLock, LW_SHARED);
 	shared->high_logno = Max(xlrec->logno + 1, shared->high_logno);
 	LWLockRelease(UndoLogLock);
 }
@@ -2531,12 +2475,6 @@ undolog_xlog_meta(XLogReaderState *record)
 	log->xid = xlrec->xid;
 	log->pid = MyProcPid; /* show as recovery process */
 	LWLockRelease(&log->mutex);
-
-	/*
-	 * TODO: We should never see an attach record for a persistence level
-	 * other than UNDO_PERMANENT, right?  That is, we should probably suppress
-	 * them and then assert that we never get them here.
-	 */
 
 	MyUndoLogState.logs[log->meta.persistence] = log;
 }

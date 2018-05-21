@@ -286,13 +286,12 @@ extern void CheckPointUndoLogs(XLogRecPtr checkPointRedo,
 extern UndoLogControl *UndoLogGet(UndoLogNumber logno);
 extern UndoLogControl *UndoLogNext(UndoLogControl *log);
 extern bool AmAttachedToUndoLog(UndoLogControl *log);
+extern UndoRecPtr UndoLogGetFirstValidRecord(UndoLogControl *log);
 
 #endif
 
 extern void UndoLogSetLastXactStartPoint(UndoRecPtr point);
 extern UndoRecPtr UndoLogGetLastXactStartPoint(UndoLogNumber logno);
-extern UndoRecPtr UndoLogGetCurrentLocation(UndoPersistence persistence);
-extern UndoRecPtr UndoLogGetFirstValidRecord(UndoLogNumber logno);
 extern UndoRecPtr UndoLogGetNextInsertPtr(UndoLogNumber logno,
 										  TransactionId xid);
 extern void UndoLogRewind(UndoRecPtr insert_urp, uint16 prevlen);

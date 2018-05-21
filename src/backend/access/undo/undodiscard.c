@@ -262,7 +262,7 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 			 */
 			if (!TransactionIdIsValid(log->oldest_xid))
 			{
-				UndoRecPtr urp = UndoLogGetFirstValidRecord(log->logno);
+				UndoRecPtr urp = UndoLogGetFirstValidRecord(log);
 
 				if (!UndoRecPtrIsValid(urp))
 					continue;
