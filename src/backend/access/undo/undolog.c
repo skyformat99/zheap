@@ -2139,24 +2139,16 @@ DropUndoLogsInTablespace(Oid tablespace)
 {
 	DIR *dir;
 	char undo_path[MAXPGPATH];
-	UndoLogNumber low_logno;
-	UndoLogNumber high_logno;
-	UndoLogNumber logno;
 	UndoLogSharedData *shared = MyUndoLogState.shared;
+	UndoLogControl *log;
 	int		i;
 
 	Assert(LWLockHeldByMe(TablespaceCreateLock));
 	Assert(tablespace != DEFAULTTABLESPACE_OID);
 
-	LWLockAcquire(UndoLogLock, LW_SHARED);
-	low_logno = shared->low_logno;
-	high_logno = shared->high_logno;
-	LWLockRelease(UndoLogLock);
-
 	/* First, try to kick everyone off any undo logs in this tablespace. */
-	for (logno = low_logno; logno < high_logno; ++logno)
+	for (log = UndoLogNext(NULL); log != NULL; log = UndoLogNext(log))
 	{
-		UndoLogControl *log = get_undo_log_by_number(logno);
 		bool ok;
 		bool return_to_freelist = false;
 
@@ -2203,7 +2195,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 		{
 			LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 			log->next_free = shared->free_lists[log->meta.persistence];
-			shared->free_lists[log->meta.persistence] = logno;
+			shared->free_lists[log->meta.persistence] = log->logno;
 			LWLockRelease(UndoLogLock);
 		}
 	}
@@ -2213,10 +2205,8 @@ DropUndoLogsInTablespace(Oid tablespace)
 	 * can attach to any non-default-tablespace undo logs while we hold
 	 * TablespaceCreateLock.  We can now drop the undo logs.
 	 */
-	for (logno = low_logno; logno < high_logno; ++logno)
+	for (log = UndoLogNext(NULL); log != NULL; log = UndoLogNext(log))
 	{
-		UndoLogControl *log = get_undo_log_by_number(logno);
-
 		/* Skip undo logs in other tablespaces. */
 		if (log->meta.tablespace != tablespace)
 			continue;
@@ -2227,7 +2217,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 		 * data, or at least be needed again very soon.  Here we need to drop
 		 * even that page from the buffer pool.
 		 */
-		forget_undo_buffers(logno, log->meta.discard, log->meta.discard, true);
+		forget_undo_buffers(log->logno, log->meta.discard, log->meta.discard, true);
 
 		/*
 		 * TODO: For now we drop the undo log, meaning that it will never be
@@ -2236,15 +2226,11 @@ DropUndoLogsInTablespace(Oid tablespace)
 		 * to be reactivated in some other tablespace.  Then we can keep the
 		 * unused portion of its address space.
 		 */
-
-		/* Log the dropping operation.  TODO: WAL */
-
 		LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
 		log->meta.status = UNDO_LOG_STATUS_DISCARDED;
 		LWLockRelease(&log->mutex);
 	}
 
-	/* TODO: flush WAL?  revisit */
 	/* Unlink all undo segment files in this tablespace. */
 	UndoLogDirectory(tablespace, undo_path);
 
@@ -2293,21 +2279,10 @@ DropUndoLogsInTablespace(Oid tablespace)
 void
 ResetUndoLogs(UndoPersistence persistence)
 {
-	UndoLogNumber low_logno;
-	UndoLogNumber high_logno;
-	UndoLogNumber logno;
-	UndoLogSharedData *shared = MyUndoLogState.shared;
+	UndoLogControl *log;
 
-	LWLockAcquire(UndoLogLock, LW_SHARED);
-	low_logno = shared->low_logno;
-	high_logno = shared->high_logno;
-	LWLockRelease(UndoLogLock);
-
-	/* TODO: figure out if locking is needed here */
-
-	for (logno = low_logno; logno < high_logno; ++logno)
+	for (log = UndoLogNext(NULL); log != NULL; log = UndoLogNext(log))
 	{
-		UndoLogControl *log = get_undo_log_by_number(logno);
 		DIR	   *dir;
 		struct dirent *de;
 		char	undo_path[MAXPGPATH];
@@ -2318,7 +2293,7 @@ ResetUndoLogs(UndoPersistence persistence)
 			continue;
 
 		/* Scan the directory for files belonging to this undo log. */
-		snprintf(segment_prefix, sizeof(segment_prefix), "%06X.", logno);
+		snprintf(segment_prefix, sizeof(segment_prefix), "%06X.", log->logno);
 		segment_prefix_size = strlen(segment_prefix);
 		UndoLogDirectory(log->meta.tablespace, undo_path);
 		dir = AllocateDir(undo_path);
@@ -2342,22 +2317,8 @@ ResetUndoLogs(UndoPersistence persistence)
 		 * We have no segment files.  Set all pointers to the current end
 		 * pointer, so we'll create the next segment from there as soon as we
 		 * need it.
-		 *
-		 * TODO: Should we rewind to zero instead, so we can reuse that (now)
-		 * unreferenced address space?
 		 */
 		log->meta.insert = log->meta.discard = log->meta.end;
-
-		/*
-		 * TODO: Here we need to call forget_undo_buffers() to nuke anything
-		 * in shared buffers that might have resulted from replaying WAL,
-		 * which will cause later checkpoints to fail when they can't find a
-		 * file to write buffers to.  But we can't, because we don't know the
-		 * true discard and end pointers here.  Ahh, that's not right.  There
-		 * can be no such WAL, because unlogged relations shouldn't be logging
-		 * anything.  So the fact that they are is a bug elsewhere in zheap
-		 * code?
-		 */
 	}
 }
 
