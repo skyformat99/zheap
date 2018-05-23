@@ -8594,7 +8594,7 @@ zheap_get_latest_tid(Relation relation,
 		/* Get the transaction who modified this tuple */
 		ZHeapTupleGetTransInfo(resulttup != NULL ? resulttup : tp,
 							   buffer, NULL, NULL, &priorXmax, NULL, NULL,
-							   true);
+							   false);
 
 		ctid = new_ctid;
 
