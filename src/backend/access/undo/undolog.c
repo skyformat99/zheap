@@ -689,6 +689,11 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
  *
  * Return an undo log insertion point that can be converted to a buffer tag
  * and an insertion point within a buffer page.
+ *
+ * XXX For now an xl_undolog_meta object is filled in, in case it turns out
+ * to be necessary to write it into the WAL record (like FPI, this must be
+ * logged once for each undo log after each checkpoint).  I think this should
+ * be moved out of this interface and done differently -- to review.
  */
 UndoRecPtr
 UndoLogAllocate(size_t size, UndoPersistence persistence, xl_undolog_meta *undometa)
@@ -881,8 +886,13 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 /*
  * Advance the insertion pointer by 'size' usable (non-header) bytes.
  *
- * Caller must WAL-log this operation first, and must replay it during
- * recovery.
+ * XXX The original idea was that this step needed to be done separately from
+ * the UndoLogAllocate() call because we were using a slightly different
+ * scheme for interlocking with checkpoints.  The thought was that the zheap
+ * operation allocating undo log space should be WAL logged in between
+ * allocation and advancing.  Now that we are using FPI-style undo log
+ * meta-data records, this probably isn't needed anymore.  We might be able
+ * to lose this function and just advance when we allocate.  To review.
  */
 void
 UndoLogAdvance(UndoRecPtr insertion_point, size_t size, UndoPersistence persistence)
