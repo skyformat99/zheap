@@ -7726,9 +7726,6 @@ ZHeapTupleHeaderAdvanceLatestRemovedXid(ZHeapTupleHeader tuple,
 										TransactionId xid,
 										TransactionId *latestRemovedXid)
 {
-	Assert (tuple->t_infomask & ZHEAP_DELETED ||
-		tuple->t_infomask & ZHEAP_UPDATED);
-
 	/*
 	 * Ignore tuples inserted by an aborted transaction.
 	 *
@@ -7738,6 +7735,8 @@ ZHeapTupleHeaderAdvanceLatestRemovedXid(ZHeapTupleHeader tuple,
 	 */
 	if (TransactionIdDidCommit(xid))
 	{
+		Assert (tuple->t_infomask & ZHEAP_DELETED ||
+				tuple->t_infomask & ZHEAP_UPDATED);
 		if (TransactionIdFollows(xid, *latestRemovedXid))
 			*latestRemovedXid = xid;
 	}
