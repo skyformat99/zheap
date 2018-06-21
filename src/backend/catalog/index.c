@@ -2429,7 +2429,7 @@ IndexBuildHeapScan(Relation heapRelation,
 		return IndexBuildZHeapRangeScan(heapRelation, indexRelation,
 									   indexInfo, allow_sync,
 									   false,
-									   0, InvalidBlockNumber,
+									   ZHEAP_METAPAGE + 1, InvalidBlockNumber,
 									   callback, callback_state, scan);
 	else
 		return IndexBuildHeapRangeScan(heapRelation, indexRelation,
@@ -3078,7 +3078,7 @@ IndexBuildZHeapRangeScan(Relation zheapRelation,
 	else
 	{
 		/* syncscan can only be requested on whole relation */
-		Assert(start_blockno == 0);
+		Assert(start_blockno == ZHEAP_METAPAGE + 1);
 		Assert(numblocks == InvalidBlockNumber);
 	}
 

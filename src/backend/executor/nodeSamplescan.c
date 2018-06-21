@@ -643,13 +643,15 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 	Page		page = NULL;
 	bool		all_visible;
 	bool		pagemode = scan->rs_pageatatime;
+	bool		finished;
+	bool		valid;
 
 	if (!scan->rs_inited)
 	{
 		/*
 		 * return null immediately if relation is empty
 		 */
-		if (scan->rs_nblocks == 0)
+		if (scan->rs_nblocks == ZHEAP_METAPAGE + 1)
 		{
 			Assert(!BufferIsValid(scan->rs_cbuf));
 			return NULL;
@@ -657,6 +659,9 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 		if (tsm->NextSampleBlock)
 		{
 			blockno = tsm->NextSampleBlock(scanstate);
+			/* Skip metapage */
+			if (blockno == ZHEAP_METAPAGE)
+				blockno = tsm->NextSampleBlock(scanstate);
 			if (!BlockNumberIsValid(blockno))
 			{
 				return NULL;
@@ -665,7 +670,9 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 		else
 			blockno = scan->rs_startblock;
 		Assert(blockno < scan->rs_nblocks);
-		zheapgetpage(scan, blockno);
+		valid = zheapgetpage(scan, blockno);
+		if (!valid)
+			goto get_next_page;
 		scan->rs_inited = true;
 	}
 	else
@@ -691,10 +698,10 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 		maxoffset = scan->rs_ntuples;
 	}
 
+get_next_tuple:
 	for (;;)
 	{
 		OffsetNumber tupoffset;
-		bool		finished;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -788,10 +795,18 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 
 		if (!pagemode)
 			LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+		break;
+	}
 
+get_next_page:
+	for (;;)
+	{
 		if (tsm->NextSampleBlock)
 		{
 			blockno = tsm->NextSampleBlock(scanstate);
+			/* Skip metapage */
+			if (blockno == ZHEAP_METAPAGE)
+				blockno = tsm->NextSampleBlock(scanstate);
 			Assert(!scan->rs_syncscan);
 			finished = !BlockNumberIsValid(blockno);
 		}
@@ -800,7 +815,7 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 			/* Without NextSampleBlock, just do a plain forward seqscan. */
 			blockno++;
 			if (blockno >= scan->rs_nblocks)
-				blockno = 0;
+				blockno = ZHEAP_METAPAGE + 1;
 
 			/*
 			 * Report our new scan position for synchronization purposes.
@@ -832,7 +847,11 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 		}
 
 		Assert(blockno < scan->rs_nblocks);
-		zheapgetpage(scan, blockno);
+		valid = zheapgetpage(scan, blockno);
+		if (!valid)
+			continue;
+		if (!scan->rs_inited)
+			scan->rs_inited = true;
 
 		/* Re-establish state for new page */
 		if (!pagemode)
@@ -847,6 +866,8 @@ zheap_tablesample_getnext(SampleScanState *scanstate)
 			all_visible = false;
 			maxoffset = scan->rs_ntuples;
 		}
+
+		goto get_next_tuple;
 	}
 
 	/* Count successfully-fetched tuples as heap fetches */

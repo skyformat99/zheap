@@ -1700,7 +1700,11 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
 										  RecentXmin, minmulti);
 			if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
+			{
 				heap_create_init_fork(rel);
+				if (RelationStorageIsZHeap(rel))
+					ZheapInitMetaPage(rel, INIT_FORKNUM);
+			}
 
 			heap_relid = RelationGetRelid(rel);
 			toast_relid = rel->rd_rel->reltoastrelid;
@@ -1718,7 +1722,11 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 					RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
 											  RecentXmin, minmulti);
 				if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
+				{
 					heap_create_init_fork(rel);
+					if (RelationStorageIsZHeap(rel))
+						ZheapInitMetaPage(rel, INIT_FORKNUM);
+				}
 				heap_close(rel, NoLock);
 			}
 
